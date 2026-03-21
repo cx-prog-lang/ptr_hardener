@@ -105,20 +105,19 @@ static bool __ph_destroy_rngmap_entries(void *obj) {
     // TODO
 }
 
-static size_t __ph_extend_granule_alignable(size_t size) {
-    return (GRANULE_SIZE - 1)       // Object alignment slack
-        + size                      // Object itself 
-        + (GRANULE_SIZE - 1)        // Range information slack
-        + sizeof(void *)            // Range information: base address 
-        + sizeof(size_t);           // Range information: length in bytes
-}
-
 static void *__ph_ceil_to_granule_ptr(void *x) {
     return (void *)((intptr_t)x + (GRANULE_SIZE - 1)) & ~((intptr_t)(GRANULE_SIZE - 1));
 }
 
 static size_t __ph_ceil_to_granule_size(size_t x) {
     return (x + (GRANULE_SIZE - 1)) & ~((size_t)(GRANULE_SIZE - 1));
+}
+
+static size_t __ph_extend_granule_alignable(size_t size) {
+    return (GRANULE_SIZE - 1)               // Object alignment slack
+        + __ph_ceil_to_granule_size(size)   // Object itself with paddings
+        + sizeof(void *)                    // Range information: base address 
+        + sizeof(size_t);                   // Range information: length (bytes)
 }
 
 static void *__ph_alloc_post(void *aobj, size_t size, struct allocator ator) {
