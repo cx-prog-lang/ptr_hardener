@@ -11,11 +11,11 @@
 /*
  * Glossary:
  *  - rngmap := RaNGe MAP
- *  - ator   := AllocaTOR
- *  - dtor   := DeallocaTOR
+ *  - Variables starting with a redundant 'a' := granule-Aligned
  */
 
 #include <assert.h>
+#include <dlfcn.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -44,13 +44,28 @@ struct range_info {
 };
 
 #define GRANULE_SIZE        (1 << 5)
-#define RNGMAP_NR_ENTRIES   (1 << 16)
+#define RNGMAP_NR_ENTRIES   (1 << 8)        // NOTE: originally 1 << 16
 
-typedef uint16_t rngmap_index_t;
+// NOTE: sizeof(rngmap_index_t) should agree with 'RNGMAP_NR_ENRIES'.
+typedef uint8_t rngmap_index_t;
 
 // Thanks to __attribute__((weak)), all __ph_rngmap's in different translation
 // units would share the same storage space.
 void *__ph_rngmap __attribute__((weak));
+
+// Actual standard allocators. The default behavior is to initialize them when
+// they're used the first time, but they _may_ be updated by a global
+// constructor if there is an annotated custom allocator. The custom ones should
+// have the same type signature to the allocator that it wants to replace.
+// Let's say multiple custom allocators (for the same original allocator) causes
+// an undefined behavior, though I think it'll function just fine.
+void *(*malloc_impl)(size_t) __attribute__((weak));           // for 'malloc'
+void *(*calloc_impl)(size_t, size_t) __attribute__((weak));   // for 'calloc'
+void *(*aalloc_impl)(size_t, size_t) __attribute__((weak));   // for 'aligned_alloc'
+void *(*realloc_impl)(void *, size_t) __attribute__((weak));  // for 'realloc'
+void (*free_impl)(void *) __attribute__((weak));              // for 'free'
+void (*sfree_impl)(void *) __attribute__((weak));             // for 'free_sized'
+void (*asfree_impl)(void *) __attribute__((weak));            // for 'free_aligned_sized'
 
 /** Internal utilities **/
 
@@ -66,20 +81,10 @@ static void *__ph_floor_to_granule_ptr(void *x) {
     return (void *)((intptr_t)x & ~(intptr_t)(GRANULE_SIZE - 1));
 }
 
-// Allocate a granule-aligned object (using 'aligned_alloc').
-// Every allocation should ultimately use this.
-static void *__ph_alloc(size_t size) {
-    return malloc(size);
-}
-
-// Every deallocation should ultimately use this.
-static void __ph_dealloc(void *ptr) {
-    free(ptr);
-}
-
 static void *__ph_create_rngmap(unsigned n_entries) {
+    assert(malloc_impl);
     unsigned size = n_entries * sizeof(struct rngmap_entry);
-    void *ret = __ph_alloc(GRANULE_SIZE);
+    void *ret = malloc_impl(size);
     if (!ret) return 0;
     memset(ret, 0, size);
     return ret;
@@ -249,35 +254,50 @@ static void *__ph_alloc_post(void *aobj, size_t size) {
 
     bool init_res = __ph_create_rngmap_entries(aobj, size);
     if (!init_res) {
-        __ph_dealloc(aobj);
+        if (!free_impl) {
+            free_impl = dlsym(RTLD_NEXT, "free");
+            if (!free_impl) return NULL;
+        }
+
+        free_impl(aobj);
         return NULL;
     }
 
     return aobj;
 }
 
-/** Wrappers and instrumented functions **/
+/** Wrapper functions **/
 
-static void *__ph_malloc(size_t size) {
+__attribute__((weak))
+void *malloc(size_t size) {
+    if (!malloc_impl) {
+        malloc_impl = dlsym(RTLD_NEXT, "malloc");
+        if (!malloc_impl) return NULL;
+    }
+
     size_t aligned_size = __ph_extend_w_range_info_granule_alignable(size);
     if (aligned_size < size) return NULL;
-    void *obj = __ph_alloc(aligned_size);
+    void *obj = malloc_impl(aligned_size);
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
     return __ph_alloc_post(aobj, size);
 }
 
-/*
-static void *__ph_calloc(size_t num, size_t esize) {
+__attribute__((weak))
+void *calloc(size_t num, size_t esize) {
+    if (!calloc_impl) {
+        calloc_impl = dlsym(RTLD_NEXT, "calloc");
+        if (!calloc_impl) return NULL;
+    }
+
     size_t size = num * esize;
     if (size < esize) return NULL;
-    size_t aligned_size = __ph_extend_granule_alignable(size);
+    size_t aligned_size = __ph_extend_w_range_info_granule_alignable(size);
     if (aligned_size < size) return NULL;
-    void *obj = __ph_alloc(aligned_size);
+    size_t aligned_num = (aligned_size + esize - 1) / esize;
+    void *obj = calloc_impl(aligned_num, esize);
     if (!obj) return NULL;
-
-    memset(obj, 0, aligned_size);
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
     size_t asize = __ph_ceil_to_granule_size(size);
@@ -285,7 +305,9 @@ static void *__ph_calloc(size_t num, size_t esize) {
     return __ph_alloc_post(aobj, asize);
 }
 
-static void *__ph_aalloc(size_t align, size_t size) {
+/*
+__attribute__((weak))
+void *__ph_aalloc(size_t align, size_t size) {
     size_t aligned_size = __ph_extend_granule_alignable(size);
     if (aligned_size < size) return NULL;
     size_t aligned_aligned_size = (aligned_size + align - 1) & ~((size_t)(align - 1));
@@ -298,7 +320,8 @@ static void *__ph_aalloc(size_t align, size_t size) {
     return __ph_alloc_post(aobj, asize);
 }
 
-static void *__ph_realloc(void *ptr, size_t size) {
+__attribute__((weak))
+void *__ph_realloc(void *ptr, size_t size) {
     bool destroy_res = __ph_destroy_rngmap_entries(ptr);
     if (!destroy_res) return NULL;
 
@@ -317,14 +340,52 @@ static void *__ph_realloc(void *ptr, size_t size) {
 }
 */
 
-static void __ph_free(void *ptr) {
+__attribute__((weak))
+void free(void *ptr) {
+    if (!free_impl) {
+        free_impl = dlsym(RTLD_NEXT, "free");
+        if (!free_impl) return;
+    }
+
     void *aptr = __ph_floor_to_granule_ptr(ptr);
 
     bool destroy_res = __ph_destroy_rngmap_entries(aptr);
     if (!destroy_res) return;
 
-    __ph_dealloc(ptr);  // TODO: implement quarantine.
+    free_impl(ptr);  // TODO: implement quarantine.
 }
+
+__attribute__((weak))
+void free_sized(void *ptr) {
+    if (!sfree_impl) {
+        sfree_impl = dlsym(RTLD_NEXT, "free_sized");
+        if (!sfree_impl) return;
+    }
+
+    void *aptr = __ph_floor_to_granule_ptr(ptr);
+
+    bool destroy_res = __ph_destroy_rngmap_entries(aptr);
+    if (!destroy_res) return;
+
+    sfree_impl(ptr);  // TODO: implement quarantine.
+}
+
+__attribute__((weak))
+void free_aligned_sized(void *ptr) {
+    if (!asfree_impl) {
+        asfree_impl = dlsym(RTLD_NEXT, "free_aligned_sized");
+        if (!asfree_impl) return;
+    }
+
+    void *aptr = __ph_floor_to_granule_ptr(ptr);
+
+    bool destroy_res = __ph_destroy_rngmap_entries(aptr);
+    if (!destroy_res) return;
+
+    asfree_impl(ptr);  // TODO: implement quarantine.
+}
+
+/** Instrumented functions **/
 
 static void __ph_ptr_move(void *prev, void* next, size_t size) {
     void *aprev = __ph_floor_to_granule_ptr(prev);
