@@ -18,7 +18,9 @@
 #include <assert.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 enum rngmap_entry_type {
     RNGMAP_ENTRY_NULL = 0,
@@ -69,7 +71,7 @@ typedef uint16_t rngmap_index_t;
 // units would share the same storage space.
 void *__ph_rngmap __attribute__((weak));
 
-/** Internal functions **/
+/** Internal utilities **/
 
 // Allocate a memory like malloc, agnostic to the underlying allocator (which
 // is assumed to behave the standard counterpart).
@@ -87,6 +89,9 @@ static void *__ph_allocate(size_t size, struct allocator ator) {
             break;
         case ATOR_REALLOC:
             ret = ((realloc_t)ator.ator)(NULL, size);
+            break;
+        default:
+            assert(false);
             break;
     }
     return ret;
@@ -120,30 +125,44 @@ static struct rngmap_entry *__ph_index_rngmap_entry(void *rngmap, rngmap_index_t
 }
 
 static void __ph_init_rngmap_entry_null(struct rngmap_entry *entry) {
-    // entry->type = RNGMAP_TYPE_NULL; entry->tag = entry->rng = entry->oob = NULL;
+    // entry->type = RNGMAP_ENTRY_NULL; entry->tag = entry->rng = entry->oob = NULL;
     memset(entry, 0, sizeof(struct rngmap_entry));
 }
 
 static void __ph_init_rngmap_entry_inb(struct rngmap_entry *entry, void *atag, void *arng) {
-    entry->type = RNGMAP_TYPE_INB;
+    entry->type = RNGMAP_ENTRY_INB;
     entry->tag = atag;
     entry->rng = arng;
     entry->oob = NULL;
 }
 
 static void __ph_init_rngmap_entry_oob(struct rngmap_entry *entry, void *atag, void *arng) {
-    entry->type = RNGMAP_TYPE_OOB;
+    entry->type = RNGMAP_ENTRY_OOB;
     entry->tag = atag;
     entry->rng = arng;
     entry->oob = NULL;
 }
 
 static void __ph_init_rngmap_entry_map(struct rngmap_entry *entry, void *rngmap) {
-    entry->type = RNGMAP_TYPE_MAP;
+    entry->type = RNGMAP_ENTRY_MAP;
     entry->tag = NULL;
     entry->rng = rngmap;
     entry->oob = NULL;
 }
+
+static void *__ph_ceil_to_granule_ptr(void *x) {
+    return (void *)(((intptr_t)x + (GRANULE_SIZE - 1)) & ~(intptr_t)(GRANULE_SIZE - 1));
+}
+
+static size_t __ph_ceil_to_granule_size(size_t x) {
+    return (x + (GRANULE_SIZE - 1)) & ~(size_t)(GRANULE_SIZE - 1);
+}
+
+static void *__ph_floor_to_granule_ptr(void *x) {
+    return (void *)((intptr_t)x & ~(intptr_t)(GRANULE_SIZE - 1));
+}
+
+/** Internal functions **/
 
 static bool __ph_init_rngmap_entry(void *rngmap, void *atag, void *arng, unsigned lv, struct allocator ator) {
     if (lv == UINT_MAX) return false;
@@ -166,7 +185,7 @@ static bool __ph_init_rngmap_entry(void *rngmap, void *atag, void *arng, unsigne
 
             __ph_init_rngmap_entry_map(entry, new_rngmap);
 
-            bool init1_res = __ph_init_rngmap_entry(new_rngmap, prev_entry->tag, prev_entry->rng, lv + 1, ator);
+            bool init1_res = __ph_init_rngmap_entry(new_rngmap, prev_entry.tag, prev_entry.rng, lv + 1, ator);
             if (!init1_res) return false;
 
             bool init2_res = __ph_init_rngmap_entry(new_rngmap, atag, arng, lv + 1, ator);
@@ -194,17 +213,13 @@ static bool __ph_init_rngmap_entries(void *aobj, size_t asize, struct allocator 
     return true;
 }
 
-static void *__ph_floor_to_granule_ptr(void *x) {
-    return (void *)((intptr_t)x & ~(intptr_t)(GRANULE_SIZE - 1));
-}
-
 static struct rngmap_entry *__ph_get_rngmap_bnd_entry(void *rngmap, void *aobj, unsigned lv) {
     if (!rngmap) return NULL;
-    struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(atag, lv));
+    struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(aobj, lv));
 
     switch (entry->type) {
         case RNGMAP_ENTRY_MAP:
-            return __ph_get_rngmap_entry(entry->rng, aobj, lv + 1);
+            return __ph_get_rngmap_bnd_entry(entry->rng, aobj, lv + 1);
         case RNGMAP_ENTRY_NULL:
             return NULL;
         default:
@@ -251,14 +266,6 @@ static bool __ph_destroy_rngmap_entries(void *aobj) {
     return true;
 }
 
-static void *__ph_ceil_to_granule_ptr(void *x) {
-    return (void *)(((intptr_t)x + (GRANULE_SIZE - 1)) & ~(intptr_t)(GRANULE_SIZE - 1));
-}
-
-static size_t __ph_ceil_to_granule_size(size_t x) {
-    return (x + (GRANULE_SIZE - 1)) & ~(size_t)(GRANULE_SIZE - 1);
-}
-
 static size_t __ph_extend_granule_alignable(size_t size) {
     return (GRANULE_SIZE - 1)               // Object alignment slack
         + __ph_ceil_to_granule_size(size)   // Object itself with paddings
@@ -275,7 +282,7 @@ static void *__ph_alloc_post(void *aobj, size_t asize, struct allocator ator) {
 
     bool init_res = __ph_init_rngmap_entries(aobj, asize, ator);
     if (!init_res) {
-        if (raw_dtor) raw_dtor(aobj);
+        if (ator.dtor) ((free_t)ator.dtor)(aobj);
         return NULL;
     }
 
@@ -285,7 +292,7 @@ static void *__ph_alloc_post(void *aobj, size_t asize, struct allocator ator) {
 /** Wrappers and instrumented functions **/
 
 static void *__ph_malloc(size_t size, malloc_t raw_ator, free_t raw_dtor) {
-    static const struct allocator ator = { 
+    struct allocator ator = { 
         .type = ATOR_MALLOC, 
         .ator = (void *)raw_ator, 
         .dtor = (void *)raw_dtor 
@@ -303,7 +310,7 @@ static void *__ph_malloc(size_t size, malloc_t raw_ator, free_t raw_dtor) {
 }
 
 static void *__ph_calloc(size_t num, size_t size, calloc_t raw_ator, free_t raw_dtor) {
-    static const struct allocator ator = {
+    struct allocator ator = {
         .type = ATOR_CALLOC,
         .ator = (void *)raw_ator,
         .dtor = (void *)raw_dtor
@@ -324,7 +331,7 @@ static void *__ph_calloc(size_t num, size_t size, calloc_t raw_ator, free_t raw_
 }
 
 static void *__ph_aalloc(size_t align, size_t size, aalloc_t raw_ator, free_t raw_dtor) {
-    static const struct allocator ator = {
+    struct allocator ator = {
         .type = ATOR_AALLOC,
         .ator = (void *)raw_ator,
         .dtor = (void *)raw_dtor
@@ -343,8 +350,8 @@ static void *__ph_aalloc(size_t align, size_t size, aalloc_t raw_ator, free_t ra
 }
 
 static void *__ph_realloc(void *ptr, size_t size, realloc_t raw_ator, free_t raw_dtor) {
-    static const struct allocator ator = {
-        .type = ATOR_realloc,
+    struct allocator ator = {
+        .type = ATOR_REALLOC,
         .ator = (void *)raw_ator,
         .dtor = (void *)raw_dtor
     };
