@@ -208,7 +208,8 @@ static struct rngmap_entry *__ph_get_rngmap_bnd_entry(void *rngmap, void *aobj, 
         case RNGMAP_ENTRY_NULL:
             return NULL;
         default:
-            return entry;
+            if (entry->tag == aobj) return entry;
+            else return NULL;
     }
 }
 
