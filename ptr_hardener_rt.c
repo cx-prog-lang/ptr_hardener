@@ -167,51 +167,51 @@ static void __ph_printf(char* format, ...) {
     va_end(arg);
 }
 
-static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv) {
+static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_t n_entries) {
     assert(_rngmap);
 
     const char *type_str[] = { "NULL", "INB", "OOB", "MAP" };
     struct rngmap_entry *rngmap = (struct rngmap_entry *)_rngmap;
 
-    __ph_printf("Range map (lv: %d, addr: %p)\n", lv, rngmap);
+    __ph_printf("Range map %d entries (lv: %d, addr: %p)\n", n_entries, lv, rngmap);
 
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+    for (int i = 0; i < n_entries; i++) {
         __ph_printf("┌");
         for (int c = 0; c < 24; c++) __ph_printf("─");
         __ph_printf("┐");
     }
     __ph_printf("\n");
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+    for (int i = 0; i < n_entries; i++) {
         __ph_printf("│");
         __ph_printf("type: %18s", type_str[rngmap[i].type]);
         __ph_printf("│");
     }
     __ph_printf("\n");
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+    for (int i = 0; i < n_entries; i++) {
         __ph_printf("│");
         __ph_printf("tag : %18p", rngmap[i].tag);
         __ph_printf("│");
     }
     __ph_printf("\n");
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+    for (int i = 0; i < n_entries; i++) {
         __ph_printf("│");
         __ph_printf("rng : %18p", rngmap[i].rng);
         __ph_printf("│");
     }
     __ph_printf("\n");
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+    for (int i = 0; i < n_entries; i++) {
         __ph_printf("│");
         __ph_printf("oob : %18p", rngmap[i].oob);
         __ph_printf("│");
     }
     __ph_printf("\n");
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+    for (int i = 0; i < n_entries; i++) {
         __ph_printf("└");
         for (int c = 0; c < 24; c++) __ph_printf("─");
         __ph_printf("┘");
     }
     __ph_printf("\n");
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+    for (int i = 0; i < n_entries; i++) {
         __ph_printf(" ");
         __ph_printf("%24d", i);
         __ph_printf(" ");
@@ -219,11 +219,11 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv) {
     __ph_printf("\n");
     __ph_printf("\n");
 
-    return;
-
-    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
-        if (rngmap[i].type == RNGMAP_ENTRY_MAP)
-            __ph_print_rngmap_inner(rngmap[i].rng, lv + 1);
+    if (!stop) {
+        for (int i = 0; i < n_entries; i++) {
+            if (rngmap[i].type == RNGMAP_ENTRY_MAP)
+                __ph_print_rngmap_inner(rngmap[i].rng, lv + 1, stop, RNGMAP_NR_ENTRIES);
+        }
     }
 }
 
@@ -233,7 +233,16 @@ static void __ph_print_rngmap() {
         return;
     }
 
-    __ph_print_rngmap_inner(__ph_rngmap, 0);
+    __ph_print_rngmap_inner(__ph_rngmap, 0, true, RNGMAP_NR_ENTRIES);
+}
+
+static void __ph_print_rngmap_entry(struct rngmap_entry *entry) {
+    if (!entry) {
+        __ph_printf("(no range map entry)\n");
+        return;
+    }
+
+    __ph_print_rngmap_inner(__ph_rngmap, 0, true, 1);
 }
 
 /** Internal utilities **/
