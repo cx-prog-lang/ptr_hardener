@@ -62,7 +62,7 @@ typedef void *(*aalloc_t)(size_t, size_t);
 typedef void *(*realloc_t)(void *, size_t);
 typedef void (*free_t)(void *);
 
-#define GRANULE_SIZE        (1 << 3)
+#define GRANULE_SIZE        (1 << 5)
 #define RNGMAP_NR_ENTRIES   (1 << 16)
 
 typedef uint16_t rngmap_index_t;
