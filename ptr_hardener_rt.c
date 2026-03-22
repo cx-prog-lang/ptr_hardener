@@ -23,6 +23,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <stdarg.h>     // NOTE: debugging
+#include <unistd.h>     // NOTE: debugging
+
 enum rngmap_entry_type {
     RNGMAP_ENTRY_NULL = 0,
     RNGMAP_ENTRY_INB,
@@ -44,10 +47,9 @@ struct range_info {
 };
 
 #define GRANULE_SIZE        (1 << 5)
-#define RNGMAP_NR_ENTRIES   (1 << 8)        // NOTE: originally 1 << 16
+#define RNGMAP_NR_ENTRIES   (1 << 3)        // NOTE: originally 1<<16.
 
-// NOTE: sizeof(rngmap_index_t) should agree with 'RNGMAP_NR_ENRIES'.
-typedef uint8_t rngmap_index_t;
+typedef uint64_t rngmap_index_t;
 
 // Thanks to __attribute__((weak)), all __ph_rngmap's in different translation
 // units would share the same storage space.
@@ -66,6 +68,173 @@ void *(*realloc_impl)(void *, size_t) __attribute__((weak));  // for 'realloc'
 void (*free_impl)(void *) __attribute__((weak));              // for 'free'
 void (*sfree_impl)(void *) __attribute__((weak));             // for 'free_sized'
 void (*asfree_impl)(void *) __attribute__((weak));            // for 'free_aligned_sized'
+
+/** Debug functions **/
+
+// Based on https://stackoverflow.com/questions/1735236/how-to-write-my-own-printf-in-c
+static char *__ph_printf_convert(uint64_t num, int base, int *len) { 
+    static char repr[]= "0123456789abcdef";
+    static char buffer[50]; 
+    char *ptr; 
+    int _len = 0;
+
+    ptr = &buffer[49]; 
+    *ptr = '\0'; 
+
+    do { 
+        *--ptr = repr[num % base]; 
+        num /= base; 
+        _len++;
+    } while(num != 0); 
+
+    *len = _len;
+    return ptr; 
+}
+
+// Based on https://stackoverflow.com/questions/1735236/how-to-write-my-own-printf-in-c
+static void __ph_printf(char* format, ...) {
+    char *traverse;
+    uint64_t i;
+    char *s;
+    int len;
+
+    va_list arg;
+    va_start(arg, format);
+
+    for (traverse = format; *traverse != '\0'; traverse++) {
+        while (*traverse != '%') {
+            if( *traverse == '\0') return;
+            write(STDOUT_FILENO, traverse, 1);
+            traverse++;
+        }
+        traverse++;
+
+        int pad = 0;
+        while (*traverse >= '0' && *traverse <= '9') {
+            pad = (pad * 10) + (*traverse - '0');
+            traverse++;
+        }
+
+        len = 0;
+        switch (*traverse) {
+            case 'c': 
+                i = va_arg(arg, int);
+                write(STDOUT_FILENO, &i, 1);
+                len++;
+                break;
+            case 'd':
+                i = va_arg(arg, int);
+                if (i < 0) {
+                    i = -i;
+                    write(STDOUT_FILENO, "-", 1);
+                    len++;
+                }
+                int dsize;
+                char *dconv = __ph_printf_convert(i, 10, &dsize);
+                write(STDOUT_FILENO, dconv, dsize);
+                len += dsize;
+                break;
+            case 's':
+                len = 0;
+                s = va_arg(arg, char *);
+                for (; *s != '\0'; s++) {
+                    write(STDOUT_FILENO, s, 1);
+                    len++;
+                }
+                break;
+            case 'x': 
+                i = va_arg(arg, unsigned int);
+                int xsize;
+                char *xconv = __ph_printf_convert(i, 16, &xsize);
+                write(STDOUT_FILENO, xconv, xsize);
+                len += xsize;
+                break;
+            case 'p': 
+                i = va_arg(arg, uintptr_t);
+                int psize;
+                char *pconv = __ph_printf_convert(i, 16, &psize);
+                write(STDOUT_FILENO, "0x", 2);
+                write(STDOUT_FILENO, pconv, psize);
+                len += psize + 2;
+                break;
+        }
+        while (len < pad) {
+            write(STDOUT_FILENO, " ", 1);
+            len++;
+        }
+    }
+
+    va_end(arg);
+}
+
+static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv) {
+    assert(_rngmap);
+
+    const char *type_str[] = { "NULL", "INB", "OOB", "MAP" };
+    struct rngmap_entry *rngmap = (struct rngmap_entry *)_rngmap;
+
+    __ph_printf("Range map (lv: %d, addr: %p)\n", lv, rngmap);
+
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        __ph_printf("┌");
+        for (int c = 0; c < 24; c++) __ph_printf("─");
+        __ph_printf("┐");
+    }
+    __ph_printf("\n");
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        __ph_printf("│");
+        __ph_printf("type: %18s", type_str[rngmap[i].type]);
+        __ph_printf("│");
+    }
+    __ph_printf("\n");
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        __ph_printf("│");
+        __ph_printf("tag : %18p", rngmap[i].tag);
+        __ph_printf("│");
+    }
+    __ph_printf("\n");
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        __ph_printf("│");
+        __ph_printf("rng : %18p", rngmap[i].rng);
+        __ph_printf("│");
+    }
+    __ph_printf("\n");
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        __ph_printf("│");
+        __ph_printf("oob : %18p", rngmap[i].oob);
+        __ph_printf("│");
+    }
+    __ph_printf("\n");
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        __ph_printf("└");
+        for (int c = 0; c < 24; c++) __ph_printf("─");
+        __ph_printf("┘");
+    }
+    __ph_printf("\n");
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        __ph_printf(" ");
+        __ph_printf("%24d", i);
+        __ph_printf(" ");
+    }
+    __ph_printf("\n");
+    __ph_printf("\n");
+
+    return;
+
+    for (int i = 0; i < RNGMAP_NR_ENTRIES; i++) {
+        if (rngmap[i].type == RNGMAP_ENTRY_MAP)
+            __ph_print_rngmap_inner(rngmap[i].rng, lv + 1);
+    }
+}
+
+static void __ph_print_rngmap() {
+    if (!__ph_rngmap) {
+        __ph_printf("(no range map)\n");
+        return;
+    }
+
+    __ph_print_rngmap_inner(__ph_rngmap, 0);
+}
 
 /** Internal utilities **/
 
@@ -94,13 +263,24 @@ static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
     uintptr_t addr_w_seed = (uintptr_t)addr + seed;
     char *_addr_w_seed = (char *)&addr_w_seed;
 
+    const uint64_t n_entries_m1 = RNGMAP_NR_ENTRIES - 1;
+    size_t idx_unit_size = 1;
+    for (; idx_unit_size < sizeof(rngmap_index_t); idx_unit_size++) {
+        if (n_entries_m1 == (n_entries_m1 & ~(~(uint64_t)0 << (idx_unit_size * 8))))
+            break;
+    }
+
     rngmap_index_t ret = 0;
 
     int off = 0;
-    for (; off + sizeof(rngmap_index_t) - 1 < sizeof(uintptr_t); off += sizeof(rngmap_index_t)) 
+    for (; off + idx_unit_size - 1 < sizeof(uintptr_t); off += idx_unit_size) 
         ret ^= *(rngmap_index_t *)(_addr_w_seed + off);
     for (int i = 0; off < sizeof(uintptr_t); i++, off++)
         ((char *)&ret)[i] ^= *(char *)(_addr_w_seed + off);
+
+    const uint64_t n_entries = RNGMAP_NR_ENTRIES;
+    if (n_entries < (1 << (idx_unit_size * 8)))
+        ret %= n_entries;
 
     return ret;
 }
@@ -262,6 +442,8 @@ static void *__ph_alloc_post(void *aobj, size_t size) {
         free_impl(aobj);
         return NULL;
     }
+
+    __ph_print_rngmap();
 
     return aobj;
 }
