@@ -306,7 +306,7 @@ void *calloc(size_t num, size_t esize) {
 }
 
 __attribute__((weak))
-void *__ph_aalloc(size_t align, size_t size) {
+void *aligned_alloc(size_t align, size_t size) {
     if (!aalloc_impl) {
         aalloc_impl = dlsym(RTLD_NEXT, "aligned_alloc");
         if (!aalloc_impl) return NULL;
@@ -325,7 +325,7 @@ void *__ph_aalloc(size_t align, size_t size) {
 }
 
 __attribute__((weak))
-void *__ph_realloc(void *ptr, size_t size) {
+void *realloc(void *ptr, size_t size) {
     if (!realloc_impl) {
         realloc_impl = dlsym(RTLD_NEXT, "realloc");
         if (!realloc_impl) return NULL;
