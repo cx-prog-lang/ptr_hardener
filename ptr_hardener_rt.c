@@ -620,6 +620,7 @@ void free_aligned_sized(void *ptr) {
 /** Instrumented functions **/
 
 static void __ph_ptr_move(void *prev, void* next, size_t size) {
+    __ph_printf("__ph_ptr_move(%p, %p, %d)\n", prev, next, size);
     void *aprev = __ph_floor_to_granule_ptr(prev);
     struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(aprev);
     if (!entry) return;
