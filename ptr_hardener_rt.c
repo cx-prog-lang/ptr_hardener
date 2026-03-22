@@ -179,13 +179,13 @@ static bool __ph_init_rngmap_entries(void *aobj, size_t size) {
     return true;
 }
 
-static struct rngmap_entry *__ph_get_rngmap_bnd_entry(void *rngmap, void *aobj, unsigned lv) {
+static struct rngmap_entry *__ph_get_rngmap_bnd_entry_inner(void *rngmap, void *aobj, unsigned lv) {
     if (!rngmap) return NULL;
     struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(aobj, lv));
 
     switch (entry->type) {
         case RNGMAP_ENTRY_MAP:
-            return __ph_get_rngmap_bnd_entry(entry->rng, aobj, lv + 1);
+            return __ph_get_rngmap_bnd_entry_inner(entry->rng, aobj, lv + 1);
         case RNGMAP_ENTRY_NULL:
             return NULL;
         default:
@@ -194,15 +194,20 @@ static struct rngmap_entry *__ph_get_rngmap_bnd_entry(void *rngmap, void *aobj, 
     }
 }
 
-static bool __ph_destroy_rngmap_entry(void *rngmap, void *tag) {
-    struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(rngmap, tag, 0);
+static struct rngmap_entry *__ph_get_rngmap_bnd_entry(void *aobj) {
+    if (!__ph_rngmap) return NULL;
+    return __ph_get_rngmap_bnd_entry_inner(__ph_rngmap, aobj, 0);
+}
+
+static bool __ph_destroy_rngmap_entry(void *tag) {
+    struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(tag);
     if (!entry) return false;
 
     void *cur_oob = entry->oob;
     __ph_init_rngmap_entry_null(entry);
 
     while (cur_oob) {        
-        struct rngmap_entry *oob_entry = __ph_get_rngmap_bnd_entry(rngmap, cur_oob, 0);
+        struct rngmap_entry *oob_entry = __ph_get_rngmap_bnd_entry(cur_oob);
         if (!oob_entry) return false;
 
         assert(oob_entry->type == RNGMAP_ENTRY_OOB);
@@ -217,15 +222,17 @@ static bool __ph_destroy_rngmap_entry(void *rngmap, void *tag) {
 static bool __ph_destroy_rngmap_entries(void *aobj) {
     assert(aobj == __ph_floor_to_granule_ptr(aobj));
 
-    struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(__ph_rngmap, aobj, 0);
+    // Get the range of the current 'aobj'.
+    struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(aobj);
     if (!entry) return true;    // Maybe untracked object. Ignore.
 
     struct range_info *rng = entry->rng;
     if (!rng) return false;
 
+    // Destroy all associated range map entries with 'aobj'.
     for (int goff = 0; goff < rng->len / GRANULE_SIZE; goff++) {
         void *tag = rng->base + (goff * GRANULE_SIZE);
-        bool destroy_res = __ph_destroy_rngmap_entry(__ph_rngmap, tag);
+        bool destroy_res = __ph_destroy_rngmap_entry(tag);
         if (!destroy_res) return false;
     }
 
@@ -324,9 +331,8 @@ static void __ph_free(void *ptr) {
     __ph_dealloc(ptr);  // TODO: implement quarantine.
 }
 
-static void __ph_ptr_move(void *prev, void* next) {
-    // TODO: check boundary.
-    // TODO: if failed, create oob.
+static void __ph_ptr_move(void *prev, void* next, size_t size) {
+    
 }
 
 static void __ph_ptr_deref(void *ptr) {
