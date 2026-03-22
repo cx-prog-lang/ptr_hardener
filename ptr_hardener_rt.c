@@ -305,13 +305,17 @@ void *calloc(size_t num, size_t esize) {
     return __ph_alloc_post(aobj, asize);
 }
 
-/*
 __attribute__((weak))
 void *__ph_aalloc(size_t align, size_t size) {
-    size_t aligned_size = __ph_extend_granule_alignable(size);
+    if (!aalloc_impl) {
+        aalloc_impl = dlsym(RTLD_NEXT, "aligned_alloc");
+        if (!aalloc_impl) return NULL;
+    }
+
+    size_t aligned_size = __ph_extend_w_range_info_granule_alignable(size);
     if (aligned_size < size) return NULL;
     size_t aligned_aligned_size = (aligned_size + align - 1) & ~((size_t)(align - 1));
-    void *obj = __ph_alloc(align, aligned_aligned_size);
+    void *obj = aalloc_impl(align, aligned_aligned_size);
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
@@ -322,10 +326,15 @@ void *__ph_aalloc(size_t align, size_t size) {
 
 __attribute__((weak))
 void *__ph_realloc(void *ptr, size_t size) {
+    if (!realloc_impl) {
+        realloc_impl = dlsym(RTLD_NEXT, "realloc");
+        if (!realloc_impl) return NULL;
+    }
+
     bool destroy_res = __ph_destroy_rngmap_entries(ptr);
     if (!destroy_res) return NULL;
 
-    size_t aligned_size = __ph_extend_granule_alignable(size);
+    size_t aligned_size = __ph_extend_w_range_info_granule_alignable(size);
     if (aligned_size < size) return NULL;
     void *obj = realloc(ptr, aligned_size);
     if (!obj) return NULL;
@@ -338,7 +347,6 @@ void *__ph_realloc(void *ptr, size_t size) {
 
     return __ph_alloc_post(aobj, asize);
 }
-*/
 
 __attribute__((weak))
 void free(void *ptr) {
