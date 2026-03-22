@@ -37,30 +37,10 @@ struct rngmap_entry {
     void *oob;
 };
 
-enum allocator_type {
-    ATOR_MALLOC,    // malloc-equivalent allocallocator
-    ATOR_CALLOC,    // calloc-equivalent allocallocator
-    ATOR_AALLOC,    // aligned_alloc-equivalent allocallocator
-    ATOR_REALLOC,   // realloc-equivalent allocallocator
-    NR_ATOR_TYPES
-};
-
-struct allocator {
-    enum allocator_type type;
-    void *ator;
-    void *dtor;
-};
-
 struct range_info {
     void *base;     // Granule-aligned base address
     size_t len;     // Granule-aligned length (in bytes)
 };
-
-typedef void *(*malloc_t)(size_t);
-typedef void *(*calloc_t)(size_t, size_t);
-typedef void *(*aalloc_t)(size_t, size_t);
-typedef void *(*realloc_t)(void *, size_t);
-typedef void (*free_t)(void *);
 
 #define GRANULE_SIZE        (1 << 5)
 #define RNGMAP_NR_ENTRIES   (1 << 16)
@@ -73,33 +53,21 @@ void *__ph_rngmap __attribute__((weak));
 
 /** Internal utilities **/
 
-// Allocate a memory like malloc, agnostic to the underlying allocator (which
-// is assumed to behave the standard counterpart).
-static void *__ph_allocate(size_t size, struct allocator ator) {
-    void *ret = 0;
-    switch (ator.type) {
-        case ATOR_MALLOC:
-            ret = ((malloc_t)ator.ator)(size);
-            break;
-        case ATOR_CALLOC:
-            ret = ((calloc_t)ator.ator)(1, size);
-            break;
-        case ATOR_AALLOC:
-            ret = ((aalloc_t)ator.ator)(4, (size + 4) & ~(size_t)0x11);
-            break;
-        case ATOR_REALLOC:
-            ret = ((realloc_t)ator.ator)(NULL, size);
-            break;
-        default:
-            assert(false);
-            break;
-    }
-    return ret;
+static void *__ph_ceil_to_granule_ptr(void *x) {
+    return (void *)(((intptr_t)x + (GRANULE_SIZE - 1)) & ~(intptr_t)(GRANULE_SIZE - 1));
 }
 
-static void *__ph_create_rngmap(unsigned n_entries, struct allocator ator) {
+static size_t __ph_ceil_to_granule_size(size_t x) {
+    return (x + (GRANULE_SIZE - 1)) & ~(size_t)(GRANULE_SIZE - 1);
+}
+
+static void *__ph_floor_to_granule_ptr(void *x) {
+    return (void *)((intptr_t)x & ~(intptr_t)(GRANULE_SIZE - 1));
+}
+
+static void *__ph_create_rngmap(unsigned n_entries) {
     unsigned size = n_entries * sizeof(struct rngmap_entry);
-    void *ret = __ph_allocate(size, ator);
+    void *ret = aligned_alloc(GRANULE_SIZE, __ph_ceil_to_granule_size(size));
     if (!ret) return 0;
     memset(ret, 0, size);
     return ret;
@@ -150,21 +118,9 @@ static void __ph_init_rngmap_entry_map(struct rngmap_entry *entry, void *rngmap)
     entry->oob = NULL;
 }
 
-static void *__ph_ceil_to_granule_ptr(void *x) {
-    return (void *)(((intptr_t)x + (GRANULE_SIZE - 1)) & ~(intptr_t)(GRANULE_SIZE - 1));
-}
-
-static size_t __ph_ceil_to_granule_size(size_t x) {
-    return (x + (GRANULE_SIZE - 1)) & ~(size_t)(GRANULE_SIZE - 1);
-}
-
-static void *__ph_floor_to_granule_ptr(void *x) {
-    return (void *)((intptr_t)x & ~(intptr_t)(GRANULE_SIZE - 1));
-}
-
 /** Internal functions **/
 
-static bool __ph_init_rngmap_entry(void *rngmap, void *atag, void *arng, unsigned lv, struct allocator ator) {
+static bool __ph_init_rngmap_entry(void *rngmap, void *atag, void *arng, unsigned lv) {
     if (lv == UINT_MAX) return false;
 
     struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(atag, lv));
@@ -175,20 +131,20 @@ static bool __ph_init_rngmap_entry(void *rngmap, void *atag, void *arng, unsigne
             __ph_init_rngmap_entry_inb(entry, atag, arng);
             break;
         case RNGMAP_ENTRY_MAP:
-            bool init_res = __ph_init_rngmap_entry(entry->rng, atag, arng, lv + 1, ator);
+            bool init_res = __ph_init_rngmap_entry(entry->rng, atag, arng, lv + 1);
             if (!init_res) return false;
             break;
         default:
             struct rngmap_entry prev_entry = *entry;
-            void *new_rngmap = __ph_create_rngmap(RNGMAP_NR_ENTRIES, ator);
+            void *new_rngmap = __ph_create_rngmap(RNGMAP_NR_ENTRIES);
             if (!new_rngmap) return false;
 
             __ph_init_rngmap_entry_map(entry, new_rngmap);
 
-            bool init1_res = __ph_init_rngmap_entry(new_rngmap, prev_entry.tag, prev_entry.rng, lv + 1, ator);
+            bool init1_res = __ph_init_rngmap_entry(new_rngmap, prev_entry.tag, prev_entry.rng, lv + 1);
             if (!init1_res) return false;
 
-            bool init2_res = __ph_init_rngmap_entry(new_rngmap, atag, arng, lv + 1, ator);
+            bool init2_res = __ph_init_rngmap_entry(new_rngmap, atag, arng, lv + 1);
             if (!init2_res) return false;
             break;
     }
@@ -196,17 +152,17 @@ static bool __ph_init_rngmap_entry(void *rngmap, void *atag, void *arng, unsigne
     return true;
 }
 
-static bool __ph_init_rngmap_entries(void *aobj, size_t asize, struct allocator ator) {
+static bool __ph_init_rngmap_entries(void *aobj, size_t asize) {
     assert(aobj == __ph_ceil_to_granule_ptr(aobj));
     assert(asize % GRANULE_SIZE == 0);
 
     if (!__ph_rngmap) 
-        __ph_rngmap = __ph_create_rngmap(RNGMAP_NR_ENTRIES, ator);
+        __ph_rngmap = __ph_create_rngmap(RNGMAP_NR_ENTRIES);
 
     for (int goff = 0; goff < asize / GRANULE_SIZE; goff++) {
         void *atag = aobj + (goff * GRANULE_SIZE);
         void *arng = aobj + asize;
-        bool init_res = __ph_init_rngmap_entry(__ph_rngmap, atag, arng, 0, ator);
+        bool init_res = __ph_init_rngmap_entry(__ph_rngmap, atag, arng, 0);
         if (!init_res) return false;
     }
     
@@ -272,7 +228,7 @@ static size_t __ph_extend_granule_alignable(size_t size) {
         + sizeof(struct range_info);        // Range information
 }
 
-static void *__ph_alloc_post(void *aobj, size_t asize, struct allocator ator) {
+static void *__ph_alloc_post(void *aobj, size_t asize) {
     assert(aobj == __ph_ceil_to_granule_ptr(aobj));
     assert(asize == __ph_ceil_to_granule_size(asize));
 
@@ -280,9 +236,9 @@ static void *__ph_alloc_post(void *aobj, size_t asize, struct allocator ator) {
     rng->base = aobj;
     rng->len = asize;
 
-    bool init_res = __ph_init_rngmap_entries(aobj, asize, ator);
+    bool init_res = __ph_init_rngmap_entries(aobj, asize);
     if (!init_res) {
-        if (ator.dtor) ((free_t)ator.dtor)(aobj);
+        free(aobj);
         return NULL;
     }
 
@@ -291,77 +247,54 @@ static void *__ph_alloc_post(void *aobj, size_t asize, struct allocator ator) {
 
 /** Wrappers and instrumented functions **/
 
-static void *__ph_malloc(size_t size, malloc_t raw_ator, free_t raw_dtor) {
-    struct allocator ator = { 
-        .type = ATOR_MALLOC, 
-        .ator = (void *)raw_ator, 
-        .dtor = (void *)raw_dtor 
-    };
-
+static void *__ph_malloc(size_t size) {
     size_t alloc_size = __ph_extend_granule_alignable(size);
     if (alloc_size < size) return NULL;
-    void *obj = raw_ator(alloc_size);
+    void *obj = malloc(alloc_size);
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
     size_t asize = __ph_ceil_to_granule_size(size);
 
-    return __ph_alloc_post(aobj, asize, ator);
+    return __ph_alloc_post(aobj, asize);
 }
 
-static void *__ph_calloc(size_t num, size_t size, calloc_t raw_ator, free_t raw_dtor) {
-    struct allocator ator = {
-        .type = ATOR_CALLOC,
-        .ator = (void *)raw_ator,
-        .dtor = (void *)raw_dtor
-    };
-
+/*
+static void *__ph_calloc(size_t num, size_t size) {
     size_t byte_size = num * size;
     if (byte_size < size) return NULL;
     size_t aligned_byte_size = __ph_extend_granule_alignable(byte_size);
     if (aligned_byte_size < byte_size) return NULL;
     size_t anum = (aligned_byte_size + size - 1) / size;
-    void *obj = raw_ator(anum, size);
+    void *obj = calloc(anum, size);
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
     size_t asize = __ph_ceil_to_granule_size(byte_size);
 
-    return __ph_alloc_post(aobj, asize, ator);
+    return __ph_alloc_post(aobj, asize);
 }
 
-static void *__ph_aalloc(size_t align, size_t size, aalloc_t raw_ator, free_t raw_dtor) {
-    struct allocator ator = {
-        .type = ATOR_AALLOC,
-        .ator = (void *)raw_ator,
-        .dtor = (void *)raw_dtor
-    };
-
+static void *__ph_aalloc(size_t align, size_t size) {
     size_t alloc_size = __ph_extend_granule_alignable(size);
     if (alloc_size < size) return NULL;
     size_t aligned_alloc_size = (alloc_size + align - 1) & ~((size_t)(align - 1));
-    void *obj = raw_ator(align, aligned_alloc_size);
+    void *obj = aligned_alloc(align, aligned_alloc_size);
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
     size_t asize = __ph_ceil_to_granule_size(size);
 
-    return __ph_alloc_post(aobj, asize, ator);
+    return __ph_alloc_post(aobj, asize);
 }
 
-static void *__ph_realloc(void *ptr, size_t size, realloc_t raw_ator, free_t raw_dtor) {
-    struct allocator ator = {
-        .type = ATOR_REALLOC,
-        .ator = (void *)raw_ator,
-        .dtor = (void *)raw_dtor
-    };
-
+static void *__ph_realloc(void *ptr, size_t size) {
     bool destroy_res = __ph_destroy_rngmap_entries(ptr);
     if (!destroy_res) return NULL;
 
     size_t alloc_size = __ph_extend_granule_alignable(size);
     if (alloc_size < size) return NULL;
-    void *obj = raw_ator(ptr, alloc_size);
+    void *obj = realloc(ptr, alloc_size);
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
@@ -370,16 +303,17 @@ static void *__ph_realloc(void *ptr, size_t size, realloc_t raw_ator, free_t raw
     if (aobj != obj)
         memmove(aobj, obj, size);
 
-    return __ph_alloc_post(aobj, asize, ator);
+    return __ph_alloc_post(aobj, asize);
 }
+*/
 
-static void __ph_free(void *ptr, free_t raw_dtor) {
+static void __ph_free(void *ptr) {
     void *aptr = __ph_floor_to_granule_ptr(ptr);
 
     bool destroy_res = __ph_destroy_rngmap_entries(aptr);
     if (!destroy_res) return;
 
-    raw_dtor(ptr);  // TODO: implement quarantine.
+    free(ptr);  // TODO: implement quarantine.
 }
 
 static void __ph_ptr_move(void *prev, void* next) {
