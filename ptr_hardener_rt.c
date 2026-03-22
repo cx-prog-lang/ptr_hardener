@@ -443,8 +443,6 @@ static void *__ph_alloc_post(void *aobj, size_t size) {
         return NULL;
     }
 
-    __ph_print_rngmap();
-
     return aobj;
 }
 
@@ -456,6 +454,7 @@ void *malloc(size_t size) {
         malloc_impl = dlsym(RTLD_NEXT, "malloc");
         if (!malloc_impl) return NULL;
     }
+    __ph_printf("malloc(%d)\n", size);
 
     size_t aligned_size = __ph_extend_w_range_info_granule_alignable(size);
     if (aligned_size < size) return NULL;
@@ -463,7 +462,11 @@ void *malloc(size_t size) {
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
-    return __ph_alloc_post(aobj, size);
+    void *ret = __ph_alloc_post(aobj, size);
+
+    __ph_print_rngmap();
+
+    return ret;
 }
 
 __attribute__((weak))
@@ -472,6 +475,7 @@ void *calloc(size_t num, size_t esize) {
         calloc_impl = dlsym(RTLD_NEXT, "calloc");
         if (!calloc_impl) return NULL;
     }
+    __ph_printf("calloc(%d, %d)\n", num, esize);
 
     size_t size = num * esize;
     if (size < esize) return NULL;
@@ -483,8 +487,11 @@ void *calloc(size_t num, size_t esize) {
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
     size_t asize = __ph_ceil_to_granule_size(size);
+    void *ret = __ph_alloc_post(aobj, asize);
 
-    return __ph_alloc_post(aobj, asize);
+    __ph_print_rngmap();
+
+    return ret;
 }
 
 __attribute__((weak))
@@ -493,6 +500,7 @@ void *aligned_alloc(size_t align, size_t size) {
         aalloc_impl = dlsym(RTLD_NEXT, "aligned_alloc");
         if (!aalloc_impl) return NULL;
     }
+    __ph_printf("aligned_alloc(%d, %d)\n", align, size);
 
     size_t aligned_size = __ph_extend_w_range_info_granule_alignable(size);
     if (aligned_size < size) return NULL;
@@ -502,8 +510,11 @@ void *aligned_alloc(size_t align, size_t size) {
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
     size_t asize = __ph_ceil_to_granule_size(size);
+    void *ret = __ph_alloc_post(aobj, asize);
 
-    return __ph_alloc_post(aobj, asize);
+    __ph_print_rngmap();
+
+    return ret;
 }
 
 __attribute__((weak))
@@ -512,6 +523,7 @@ void *realloc(void *ptr, size_t size) {
         realloc_impl = dlsym(RTLD_NEXT, "realloc");
         if (!realloc_impl) return NULL;
     }
+    __ph_printf("realloc(%p, %d)\n", ptr, size);
 
     bool destroy_res = __ph_destroy_rngmap_entries(ptr);
     if (!destroy_res) return NULL;
@@ -527,7 +539,11 @@ void *realloc(void *ptr, size_t size) {
     if (aobj != obj)
         memmove(aobj, obj, size);
 
-    return __ph_alloc_post(aobj, asize);
+    void *ret = __ph_alloc_post(aobj, asize);
+
+    __ph_print_rngmap();
+
+    return ret;
 }
 
 __attribute__((weak))
