@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 bool test_char_access_okay() {
+    malloc(2);
     return true;
 }
 

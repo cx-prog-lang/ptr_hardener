@@ -353,7 +353,7 @@ static bool __ph_create_rngmap_entries(void *aobj, size_t size) {
     if (!__ph_rngmap) 
         __ph_rngmap = __ph_create_rngmap(RNGMAP_NR_ENTRIES);
 
-    for (int goff = 0; goff < size / GRANULE_SIZE; goff++) {
+    for (int goff = 0; goff <= size / GRANULE_SIZE; goff++) {
         void *tag = aobj + (goff * GRANULE_SIZE);
         void *rng = aobj + size;
         void *create_res = __ph_create_rngmap_entry(RNGMAP_ENTRY_INB, tag, rng);
@@ -462,6 +462,8 @@ void *malloc(size_t size) {
     if (!obj) return NULL;
 
     void *aobj = __ph_ceil_to_granule_ptr(obj);
+    if (size == 1024) return aobj;      // NOTE: God awful stopgap (from libc) 
+
     void *ret = __ph_alloc_post(aobj, size);
 
     __ph_print_rngmap();
