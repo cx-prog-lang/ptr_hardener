@@ -167,7 +167,7 @@ static void __ph_printf(char* format, ...) {
     va_end(arg);
 }
 
-static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_t n_entries) {
+static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_t n_entries, bool detailed) {
     assert(_rngmap);
 
     const char *type_str[] = { "NULL", "INB", "OOB", "MAP" };
@@ -198,6 +198,20 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_
         __ph_printf("rng : %18p", rngmap[i].rng);
         __ph_printf("│");
     }
+    if (detailed) {
+        __ph_printf("\n");
+        for (int i = 0; i < n_entries; i++) {
+            __ph_printf("│");
+            __ph_printf("-bas: %18p", ((struct range_info *)rngmap[i].rng)->base);
+            __ph_printf("│");
+        }
+        __ph_printf("\n");
+        for (int i = 0; i < n_entries; i++) {
+            __ph_printf("│");
+            __ph_printf("-len: %18d", ((struct range_info *)rngmap[i].rng)->len);
+            __ph_printf("│");
+        }
+    }
     __ph_printf("\n");
     for (int i = 0; i < n_entries; i++) {
         __ph_printf("│");
@@ -222,7 +236,7 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_
     if (!stop) {
         for (int i = 0; i < n_entries; i++) {
             if (rngmap[i].type == RNGMAP_ENTRY_MAP)
-                __ph_print_rngmap_inner(rngmap[i].rng, lv + 1, stop, RNGMAP_NR_ENTRIES);
+                __ph_print_rngmap_inner(rngmap[i].rng, lv + 1, stop, RNGMAP_NR_ENTRIES, detailed);
         }
     }
 }
@@ -233,7 +247,7 @@ static void __ph_print_rngmap() {
         return;
     }
 
-    __ph_print_rngmap_inner(__ph_rngmap, 0, true, RNGMAP_NR_ENTRIES);
+    __ph_print_rngmap_inner(__ph_rngmap, 0, true, RNGMAP_NR_ENTRIES, false);
 }
 
 static void __ph_print_rngmap_entry(struct rngmap_entry *entry) {
@@ -242,7 +256,7 @@ static void __ph_print_rngmap_entry(struct rngmap_entry *entry) {
         return;
     }
 
-    __ph_print_rngmap_inner(__ph_rngmap, 0, true, 1);
+    __ph_print_rngmap_inner(entry, 0, true, 1, true);
 }
 
 /** Internal utilities **/
@@ -330,6 +344,7 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
     switch (entry->type) {
         case RNGMAP_ENTRY_NULL:
             __ph_set_rngmap_entry_bnd(entry, evalue.type, evalue.tag, evalue.rng);
+            __ph_print_rngmap_entry(entry);
             return entry;
         case RNGMAP_ENTRY_MAP:
             return __ph_create_rngmap_entry_inner(entry->rng, evalue, lv + 1);
@@ -622,6 +637,8 @@ static void __ph_ptr_move(void *prev, void* next, size_t size) {
             entry = entry->oob;
         entry->oob = (void *)oob_entry;
     } 
+
+    __ph_print_rngmap();
 }
 
 static void __ph_ptr_deref(void *ptr) {

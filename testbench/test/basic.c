@@ -4,7 +4,10 @@
 #include <stdlib.h>
 
 bool test_char_access_okay() {
-    malloc(2);
+    void *obj = malloc(sizeof(char));
+    void *ptr = obj;
+    ptr += 1;
+    __ph_ptr_move(obj, obj+1, sizeof(char));
     return true;
 }
 
