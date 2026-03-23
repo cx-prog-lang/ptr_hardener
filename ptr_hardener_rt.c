@@ -34,6 +34,10 @@ enum rngmap_entry_type {
     NR_RNGMAP_ENTRY_TYPES
 };
 
+#define IS_RNGMAP_ENTRY_BND(x)  \
+    (x == RNGMAP_ENTRY_INB ||   \
+     x == RNGMAP_ENTRY_OOB)
+
 struct rngmap_entry {
     enum rngmap_entry_type type;
     void *tag;
@@ -202,7 +206,7 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned base_lv, unsigned lv
         __ph_printf("\n");
         for (int i = 0; i < n_entries; i++) {
             __ph_printf("│");
-            if (rngmap[i].type == RNGMAP_ENTRY_INB || rngmap[i].type == RNGMAP_ENTRY_OOB)
+            if (IS_RNGMAP_ENTRY_BND(rngmap[i].type))
                 __ph_printf("-bas: %18p", ((struct range_info *)rngmap[i].rng)->base);
             else
                 for (int c = 0; c < 24; c++) __ph_printf(" ");
@@ -211,7 +215,7 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned base_lv, unsigned lv
         __ph_printf("\n");
         for (int i = 0; i < n_entries; i++) {
             __ph_printf("│");
-            if (rngmap[i].type == RNGMAP_ENTRY_INB || rngmap[i].type == RNGMAP_ENTRY_OOB)
+            if (IS_RNGMAP_ENTRY_BND(rngmap[i].type))
                 __ph_printf("-len: %18d", ((struct range_info *)rngmap[i].rng)->len);
             else
                 for (int c = 0; c < 24; c++) __ph_printf(" ");
