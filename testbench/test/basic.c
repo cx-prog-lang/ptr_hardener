@@ -17,7 +17,7 @@ bool test_char_access_okay() {
     ptr2 += 2;
 
     __ph_ptr_deref(ptr2);
-    *ptr2;
+    *(char *)ptr2;
     return true;
 }
 
