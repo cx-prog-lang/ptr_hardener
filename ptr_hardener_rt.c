@@ -202,13 +202,19 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_
         __ph_printf("\n");
         for (int i = 0; i < n_entries; i++) {
             __ph_printf("│");
-            __ph_printf("-bas: %18p", ((struct range_info *)rngmap[i].rng)->base);
+            if (rngmap[i].type == RNGMAP_ENTRY_INB || rngmap[i].type == RNGMAP_ENTRY_OOB)
+                __ph_printf("-bas: %18p", ((struct range_info *)rngmap[i].rng)->base);
+            else
+                for (int c = 0; c < 24; c++) __ph_printf(" ");
             __ph_printf("│");
         }
         __ph_printf("\n");
         for (int i = 0; i < n_entries; i++) {
             __ph_printf("│");
-            __ph_printf("-len: %18d", ((struct range_info *)rngmap[i].rng)->len);
+            if (rngmap[i].type == RNGMAP_ENTRY_INB || rngmap[i].type == RNGMAP_ENTRY_OOB)
+                __ph_printf("-len: %18d", ((struct range_info *)rngmap[i].rng)->len);
+            else
+                for (int c = 0; c < 24; c++) __ph_printf(" ");
             __ph_printf("│");
         }
     }
@@ -360,6 +366,8 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
 
             struct rngmap_entry *entry2 =__ph_create_rngmap_entry_inner(new_rngmap, evalue, lv + 1);
             if (!entry2) return NULL;
+
+            __ph_print_rngmap_entry(entry);
 
             return entry2;
     }
