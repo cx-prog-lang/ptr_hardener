@@ -295,12 +295,11 @@ static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
 
     rngmap_index_t ret = 0;
 
-    // FIXME: optimize this.
     int off = 0;
-    for (int _off = 0; _off < sizeof(uintptr_t); off++, _off++) {
-        if (off >= idx_unit_size) off = 0;
-        ((char *)&ret)[off] ^= *(char *)(_addr_w_seed + _off);
-    }
+    for (; off + idx_unit_size - 1 < sizeof(uintptr_t); off += idx_unit_size) 
+        ret ^= *(rngmap_index_t *)(_addr_w_seed + off);
+    for (int i = 0; off < sizeof(uintptr_t); i++, off++)
+        ((char *)&ret)[i] ^= *(char *)(_addr_w_seed + off);
 
     const uint64_t n_entries = RNGMAP_NR_ENTRIES;
     if (n_entries < (1 << (idx_unit_size * 8)))
