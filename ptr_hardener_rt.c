@@ -632,7 +632,7 @@ static void __ph_ptr_move(void *prev, size_t psize, void* next, size_t nsize) {
         if (prev != next || psize != nsize) {
             is_oob = true;
             
-            rng = malloc(sizeof(struct range_info));
+            rng = malloc_impl(sizeof(struct range_info));
             rng->base = prev;
             rng->len = 0;
         }
