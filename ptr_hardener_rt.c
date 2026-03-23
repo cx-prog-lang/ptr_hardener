@@ -666,6 +666,8 @@ static void __ph_ptr_move(void *prev, size_t psize, void* next, size_t nsize) {
 }
 
 static void __ph_ptr_deref(void *ptr) {
+    __ph_printf("__ph_ptr_deref(%p)\n", ptr);
+
     struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(ptr);
     if (entry && entry->type == RNGMAP_ENTRY_OOB)
         raise(SIGUSR1);

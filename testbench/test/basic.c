@@ -15,6 +15,9 @@ bool test_char_access_okay() {
     ptr2 += 1;
     __ph_ptr_move(ptr2, sizeof(char), ptr2+2, sizeof(char));
     ptr2 += 2;
+
+    __ph_ptr_deref(ptr2);
+    *ptr2;
     return true;
 }
 
