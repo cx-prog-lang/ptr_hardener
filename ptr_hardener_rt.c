@@ -28,15 +28,12 @@
 
 enum rngmap_entry_type {
     RNGMAP_ENTRY_NULL = 0,
+    RNGMAP_ENTRY_MAP,
     RNGMAP_ENTRY_INB,
     RNGMAP_ENTRY_OOB,
-    RNGMAP_ENTRY_MAP,
-    NR_RNGMAP_ENTRY_TYPES
 };
 
-#define IS_RNGMAP_ENTRY_BND(x)  \
-    (x == RNGMAP_ENTRY_INB ||   \
-     x == RNGMAP_ENTRY_OOB)
+#define IS_RNGMAP_ENTRY_BND(x) ((x) > RNGMAP_ENTRY_MAP)
 
 struct rngmap_entry {
     enum rngmap_entry_type type;
@@ -174,7 +171,7 @@ static void __ph_printf(char* format, ...) {
 static void __ph_print_rngmap_inner(void *_rngmap, unsigned base_lv, unsigned lv, bool stop, size_t n_entries, bool detailed) {
     assert(_rngmap);
 
-    const char *type_str[] = { "NULL", "INB", "OOB", "MAP" };
+    const char *type_str[] = { "NULL", "MAP", "INB", "OOB" };
     struct rngmap_entry *rngmap = (struct rngmap_entry *)_rngmap;
 
     __ph_printf("Range map %d entries (level: %d, addr: %p)\n", n_entries, base_lv + lv, rngmap);
@@ -345,7 +342,7 @@ static void __ph_set_rngmap_entry_map(struct rngmap_entry *entry, void *rngmap) 
 /** Internal functions **/
 
 static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct rngmap_entry evalue, unsigned lv) {
-    assert(evalue.type == RNGMAP_ENTRY_INB || evalue.type == RNGMAP_ENTRY_OOB);
+    assert(IS_RNGMAP_ENTRY_BND(evalue.type));
 
     if (lv == UINT_MAX) return NULL;
 
