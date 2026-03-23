@@ -625,12 +625,19 @@ static void __ph_ptr_move(void *prev, size_t psize, void* next, size_t nsize) {
 
     void *aprev = __ph_floor_to_granule_ptr(prev);
     struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(aprev);
+    struct range_info *rng;
 
     if (!entry) {
         // Moving or casting an untracked pointer is a straight-up oob.
-        is_oob = (prev != next || psize != nsize);
+        if (prev != next || psize != nsize) {
+            is_oob = true;
+            
+            rng = malloc(sizeof(struct range_info));
+            rng->base = prev;
+            rng->len = 0;
+        }
     } else {
-        struct range_info *rng = entry->rng;
+        rng = entry->rng;
         assert(rng);
 
         // If 'next' is out of bounds, it's oob.
@@ -643,9 +650,16 @@ static void __ph_ptr_move(void *prev, size_t psize, void* next, size_t nsize) {
         if (!oob_entry) return;
 
         // Chain 'oob_entry' to this inbound entry.
-        while (entry->oob)
-            entry = entry->oob;
-        entry->oob = (void *)oob_entry;
+        // FIXME: the 'oob_entry' from an untracked pointer will pile up uncleaned no matter what.
+        // This will become a problem if some of them turn into **inbound** by future allocations.
+        // IDEA: make a new range map entry type 'inb_untracked' to keep track of inbound untracked objects.
+        // When a further 'legitimate' allocation make it 'inb', overwrite this entry and clear
+        // associated 'oob' entries.
+        if (entry) {
+            while (entry->oob)
+                entry = entry->oob;
+            entry->oob = (void *)oob_entry;
+        }
     } 
 
     __ph_print_rngmap();
