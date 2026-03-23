@@ -288,6 +288,7 @@ static void *__ph_create_rngmap(unsigned n_entries) {
     return ret;
 }
 
+// FIXME: optimize this.
 static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
     uintptr_t addr_w_seed = (uintptr_t)addr + seed;
     char *_addr_w_seed = (char *)&addr_w_seed;
@@ -364,7 +365,7 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
             struct rngmap_entry *entry1 = __ph_create_rngmap_entry_inner(new_rngmap, prev_evalue, lv + 1);
             if (!entry1) return NULL;
 
-            struct rngmap_entry *entry2 =__ph_create_rngmap_entry_inner(new_rngmap, evalue, lv + 1);
+            struct rngmap_entry *entry2 = __ph_create_rngmap_entry_inner(new_rngmap, evalue, lv + 1);
             if (!entry2) return NULL;
 
             __ph_print_rngmap_entry(lv, entry);
