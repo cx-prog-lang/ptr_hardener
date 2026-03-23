@@ -619,17 +619,26 @@ void free_aligned_sized(void *ptr) {
 
 /** Instrumented functions **/
 
-static void __ph_ptr_move(void *prev, void* next, size_t size) {
-    __ph_printf("__ph_ptr_move(%p, %p, %d)\n", prev, next, size);
+static void __ph_ptr_move(void *prev, size_t psize, void* next, size_t nsize) {
+    __ph_printf("__ph_ptr_move(%p, %p, %d)\n", prev, next, nsize);
+    bool is_oob = false;
+
     void *aprev = __ph_floor_to_granule_ptr(prev);
     struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(aprev);
-    if (!entry) return;
 
-    struct range_info *rng = entry->rng;
-    assert(rng);
+    if (!entry) {
+        // Moving or casting an untracked pointer is a straight-up oob.
+        is_oob = (prev != next || psize != nsize);
+    } else {
+        struct range_info *rng = entry->rng;
+        assert(rng);
 
-    // If 'next' is out of bounds, create an 'oob' range map entry.
-    if (!(rng->base <= next && next + size <= rng->base + rng->len)) {
+        // If 'next' is out of bounds, it's oob.
+        is_oob = !(rng->base <= next && next + nsize <= rng->base + rng->len);
+    }
+
+    // If 'is_oob', create an 'oob' range map entry.
+    if (is_oob) {
         struct rngmap_entry *oob_entry = __ph_create_rngmap_entry(RNGMAP_ENTRY_OOB, next, (void *)rng);
         if (!oob_entry) return;
 

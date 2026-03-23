@@ -7,7 +7,7 @@ bool test_char_access_okay() {
     void *obj = malloc(sizeof(char));
     void *ptr = obj;
     ptr += 1;
-    __ph_ptr_move(obj, obj+1, sizeof(char));
+    __ph_ptr_move(obj, sizeof(char), obj+1, sizeof(char));
     return true;
 }
 
