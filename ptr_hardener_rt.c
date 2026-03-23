@@ -27,10 +27,11 @@
 #include <unistd.h>     // NOTE: debugging
 
 enum rngmap_entry_type {
-    RNGMAP_ENTRY_NULL = 0,
-    RNGMAP_ENTRY_MAP,
-    RNGMAP_ENTRY_INB,
-    RNGMAP_ENTRY_OOB,
+    RNGMAP_ENTRY_NULL = 0,      // null type
+    RNGMAP_ENTRY_MAP,           // range map type
+    RNGMAP_ENTRY_INB,           // inbound type
+    RNGMAP_ENTRY_INBX,          // inbound type (untracked pointer only)
+    RNGMAP_ENTRY_OOB,           // out-of-bounds type
 };
 
 #define IS_RNGMAP_ENTRY_BND(x) ((x) > RNGMAP_ENTRY_MAP)
@@ -171,7 +172,7 @@ static void __ph_printf(char* format, ...) {
 static void __ph_print_rngmap_inner(void *_rngmap, unsigned base_lv, unsigned lv, bool stop, size_t n_entries, bool detailed) {
     assert(_rngmap);
 
-    const char *type_str[] = { "NULL", "MAP", "INB", "OOB" };
+    const char *type_str[] = { "NULL", "MAP", "INB", "INBX", "OOB" };
     struct rngmap_entry *rngmap = (struct rngmap_entry *)_rngmap;
 
     __ph_printf("Range map %d entries (level: %d, addr: %p)\n", n_entries, base_lv + lv, rngmap);
