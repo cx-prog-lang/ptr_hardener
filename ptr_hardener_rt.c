@@ -167,13 +167,13 @@ static void __ph_printf(char* format, ...) {
     va_end(arg);
 }
 
-static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_t n_entries, bool detailed) {
+static void __ph_print_rngmap_inner(void *_rngmap, unsigned base_lv, unsigned lv, bool stop, size_t n_entries, bool detailed) {
     assert(_rngmap);
 
     const char *type_str[] = { "NULL", "INB", "OOB", "MAP" };
     struct rngmap_entry *rngmap = (struct rngmap_entry *)_rngmap;
 
-    __ph_printf("Range map %d entries (lv: %d, addr: %p)\n", n_entries, lv, rngmap);
+    __ph_printf("Range map %d entries (level: %d, addr: %p)\n", n_entries, base_lv + lv, rngmap);
 
     for (int i = 0; i < n_entries; i++) {
         __ph_printf("┌");
@@ -242,7 +242,7 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned lv, bool stop, size_
     if (!stop) {
         for (int i = 0; i < n_entries; i++) {
             if (rngmap[i].type == RNGMAP_ENTRY_MAP)
-                __ph_print_rngmap_inner(rngmap[i].rng, lv + 1, stop, RNGMAP_NR_ENTRIES, detailed);
+                __ph_print_rngmap_inner(rngmap[i].rng, base_lv, lv + 1, stop, RNGMAP_NR_ENTRIES, detailed);
         }
     }
 }
@@ -253,16 +253,16 @@ static void __ph_print_rngmap() {
         return;
     }
 
-    __ph_print_rngmap_inner(__ph_rngmap, 0, true, RNGMAP_NR_ENTRIES, false);
+    __ph_print_rngmap_inner(__ph_rngmap, 0, 0, true, RNGMAP_NR_ENTRIES, false);
 }
 
-static void __ph_print_rngmap_entry(struct rngmap_entry *entry) {
+static void __ph_print_rngmap_entry(unsigned base_lv, struct rngmap_entry *entry) {
     if (!entry) {
         __ph_printf("(no range map entry)\n");
         return;
     }
 
-    __ph_print_rngmap_inner(entry, 0, true, 1, true);
+    __ph_print_rngmap_inner(entry, base_lv, 0, true, 1, true);
 }
 
 /** Internal utilities **/
@@ -350,7 +350,7 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
     switch (entry->type) {
         case RNGMAP_ENTRY_NULL:
             __ph_set_rngmap_entry_bnd(entry, evalue.type, evalue.tag, evalue.rng);
-            __ph_print_rngmap_entry(entry);
+            __ph_print_rngmap_entry(lv, entry);
             return entry;
         case RNGMAP_ENTRY_MAP:
             return __ph_create_rngmap_entry_inner(entry->rng, evalue, lv + 1);
@@ -367,7 +367,7 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
             struct rngmap_entry *entry2 =__ph_create_rngmap_entry_inner(new_rngmap, evalue, lv + 1);
             if (!entry2) return NULL;
 
-            __ph_print_rngmap_entry(entry);
+            __ph_print_rngmap_entry(lv, entry);
 
             return entry2;
     }
