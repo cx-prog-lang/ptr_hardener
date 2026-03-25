@@ -26,6 +26,9 @@
 #include <stdarg.h>     // NOTE: debugging
 #include <unistd.h>     // NOTE: debugging
 
+// FIXME: reimplement this in a portable way.
+#define STACK_MASK  (0x7f0000000000)
+
 enum rngmap_entry_type {
     RNGMAP_ENTRY_NULL = 0,      // null type
     RNGMAP_ENTRY_MAP,           // range map type
@@ -630,46 +633,73 @@ void free_aligned_sized(void *ptr) {
 
 /** Instrumented functions **/
 
+// TODO: obj map (inbound), ptr map (oob)
+// TODO: stack blob range
+// TODO: untracked pointer tolerance
+
 static void __ph_ptr_move(void *prev, size_t psize, void* next, size_t nsize) {
-    __ph_printf("__ph_ptr_move(%p, %p, %d)\n", prev, next, nsize);
+    __ph_printf("__ph_ptr_move(%p, %d, %p, %d)\n", prev, psize, next, nsize);
     bool is_oob = false;
 
     void *aprev = __ph_floor_to_granule_ptr(prev);
-    struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(aprev);
-    struct range_info *rng;
+    struct rngmap_entry *entry = NULL;
+    struct range_info *rng = NULL;
 
-    if (!entry) {
-        // Moving or casting an untracked pointer is a straight-up oob.
-        if (prev != next || psize != nsize) {
+    // For stack pointers, only check if 'next' is still inside the stack.
+    // FIXME: reimplement this in a portable way.
+    if ((intptr_t)prev & STACK_MASK) {
+        if (!(((intptr_t)next + nsize - 1) & STACK_MASK)) {
             is_oob = true;
-            
+
             rng = malloc_impl(sizeof(struct range_info));
             rng->base = prev;
             rng->len = 0;
         }
     } else {
-        rng = entry->rng;
-        assert(rng);
+        entry = __ph_get_rngmap_bnd_entry(aprev);
 
-        // If 'next' is out of bounds, it's oob.
-        is_oob = !(rng->base <= next && next + nsize <= rng->base + rng->len);
+        if (!entry) {
+            // Moving or casting an untracked pointer is a straight-up oob.
+            if (prev != next || psize != nsize) {
+                is_oob = true;
+                
+                rng = malloc_impl(sizeof(struct range_info));
+                rng->base = prev;
+                rng->len = 0;
+            }
+        } else {
+            rng = entry->rng;
+            assert(rng);
+
+            // If 'next' is out of bounds, it's oob.
+            is_oob = !(rng->base <= next && next + nsize <= rng->base + rng->len);
+        }
     }
 
     // If 'is_oob', create an 'oob' range map entry.
     if (is_oob) {
-        struct rngmap_entry *oob_entry = __ph_create_rngmap_entry(RNGMAP_ENTRY_OOB, next, (void *)rng);
-        if (!oob_entry) return;
+        // Check if there is a 'bound' entry already.
+        struct rngmap_entry *oob_entry = __ph_get_rngmap_bnd_entry(next);
+        if (oob_entry) {
+            // If there is, and it's not a 'oob' entry, raise a signal early.
+            if (oob_entry->type != RNGMAP_ENTRY_OOB)
+                raise(SIGUSR1);
+        } else {
+            // If there isn't, create a new 'oob' entry.
+            oob_entry = __ph_create_rngmap_entry(RNGMAP_ENTRY_OOB, next, (void *)rng);
+            if (!oob_entry) return;
 
-        // Chain 'oob_entry' to this inbound entry.
-        // FIXME: the 'oob_entry' from an untracked pointer will pile up uncleaned no matter what.
-        // This will become a problem if some of them turn into **inbound** by future allocations.
-        // IDEA: make a new range map entry type 'inb_untracked' to keep track of inbound untracked objects.
-        // When a further 'legitimate' allocation make it 'inb', overwrite this entry and clear
-        // associated 'oob' entries.
-        if (entry) {
-            while (entry->oob)
-                entry = entry->oob;
-            entry->oob = (void *)oob_entry;
+            // Chain 'oob_entry' to this inbound entry.
+            // FIXME: the 'oob_entry' from an untracked pointer will pile up uncleaned no matter what.
+            // This will become a problem if some of them turn into **inbound** by future allocations.
+            // IDEA: make a new range map entry type 'inb_untracked' to keep track of inbound untracked objects.
+            // When a further 'legitimate' allocation make it 'inb', overwrite this entry and clear
+            // associated 'oob' entries.
+            if (entry) {
+                while (entry->oob)
+                    entry = entry->oob;
+                entry->oob = (void *)oob_entry;
+            }
         }
     } 
 

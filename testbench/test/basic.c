@@ -4,6 +4,8 @@
 #include <stdlib.h>
 
 bool test_char_access_okay() {
+    int a;
+
     void *obj = malloc(sizeof(char));
     void *ptr = obj;
     __ph_ptr_move(ptr, sizeof(char), ptr+1, sizeof(char));
@@ -14,7 +16,11 @@ bool test_char_access_okay() {
     __ph_ptr_move(ptr2, sizeof(char), ptr2+1, sizeof(char));
     ptr2 += 1;
     __ph_ptr_move(ptr2, sizeof(char), ptr2+2, sizeof(char));
+    __ph_ptr_move(ptr2, sizeof(char), ptr2+2, sizeof(char));
     ptr2 += 2;
+
+    __ph_ptr_move(&a, sizeof(int), &a+2, sizeof(int));
+    __ph_ptr_move(&a, sizeof(int), ptr2+5, sizeof(int));
 
     __ph_ptr_deref(ptr2);
     *(char *)ptr2;
