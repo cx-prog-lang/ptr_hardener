@@ -171,11 +171,10 @@ static void __ph_printf(char* format, ...) {
     va_end(arg);
 }
 
-static void __ph_print_rngmap_inner(void *_rngmap, unsigned base_lv, unsigned lv, bool stop, size_t n_entries, bool detailed) {
-    assert(_rngmap);
+static void __ph_print_rngmap_inner(struct rngmap_entry *rngmap, unsigned base_lv, unsigned lv, bool stop, size_t n_entries, bool detailed) {
+    assert(rngmap);
 
     const char *type_str[] = { "NULL", "MAP", "INB", "INBX", "OOB" };
-    struct rngmap_entry *rngmap = (struct rngmap_entry *)_rngmap;
 
     __ph_printf("Range map %d entries (level: %d, addr: %p)\n", n_entries, base_lv + lv, rngmap);
 
@@ -319,10 +318,6 @@ static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
     return ret;
 }
 
-static struct rngmap_entry *__ph_index_rngmap_entry(void *rngmap, rngmap_index_t idx) {
-    return &((struct rngmap_entry *)rngmap)[idx];
-}
-
 static void __ph_set_rngmap_entry_null(struct rngmap_entry *entry) {
     // entry->type = RNGMAP_ENTRY_NULL; entry->obj = entry->rng = entry->oob = NULL;
     memset(entry, 0, sizeof(struct rngmap_entry));
@@ -337,19 +332,19 @@ static void __ph_set_rngmap_entry_bnd(struct rngmap_entry *entry, enum rngmap_en
 
 static void __ph_set_rngmap_entry_map(struct rngmap_entry *entry, void *rngmap) {
     entry->type = RNGMAP_ENTRY_MAP;
-    entry->obj = NULL;
-    entry->rng = rngmap;
+    entry->obj = rngmap;
+    entry->rng = NULL;
     entry->oob = NULL;
 }
 
 /** Internal functions **/
 
-static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct rngmap_entry evalue, unsigned lv) {
+static struct rngmap_entry *__ph_create_rngmap_entry_inner(struct rngmap_entry *rngmap, struct rngmap_entry evalue, unsigned lv) {
     assert(IS_RNGMAP_ENTRY_BND(evalue.type));
 
     if (lv == UINT_MAX) return NULL;
 
-    struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(evalue.obj, lv));
+    struct rngmap_entry *entry = &rngmap[__ph_hash_addr(evalue.obj, lv)];
     assert(entry);
 
     switch (entry->type) {
@@ -358,7 +353,7 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
             __ph_print_rngmap_entry(lv, entry);
             return entry;
         case RNGMAP_ENTRY_MAP:
-            return __ph_create_rngmap_entry_inner(entry->rng, evalue, lv + 1);
+            return __ph_create_rngmap_entry_inner(entry->obj, evalue, lv + 1);
         default:
             struct rngmap_entry prev_evalue = *entry;
             void *new_rngmap = __ph_create_rngmap(RNGMAP_NR_ENTRIES);
@@ -400,13 +395,13 @@ static bool __ph_create_rngmap_entries(void *aobj, size_t size) {
     return true;
 }
 
-static struct rngmap_entry *__ph_get_rngmap_bnd_entry_inner(void *rngmap, void *obj, unsigned lv) {
+static struct rngmap_entry *__ph_get_rngmap_bnd_entry_inner(struct rngmap_entry *rngmap, void *obj, unsigned lv) {
     if (!rngmap) return NULL;
-    struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(obj, lv));
+    struct rngmap_entry *entry = &rngmap[__ph_hash_addr(obj, lv)];
 
     switch (entry->type) {
         case RNGMAP_ENTRY_MAP:
-            return __ph_get_rngmap_bnd_entry_inner(entry->rng, obj, lv + 1);
+            return __ph_get_rngmap_bnd_entry_inner(entry->obj, obj, lv + 1);
         case RNGMAP_ENTRY_NULL:
             return NULL;
         default:
