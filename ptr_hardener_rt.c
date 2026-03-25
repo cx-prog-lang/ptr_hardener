@@ -27,7 +27,7 @@
 #include <unistd.h>     // NOTE: debugging
 
 // FIXME: reimplement this in a portable way.
-#define STACK_MASK  (0x7f0000000000)
+#define STACK_MASK  (0x700000000000)
 
 // Largely, the entry type is divided into 3 classes: NULL, MAP, and BND.
 // NULL represents "no entry", MAP represents a nested range map, and BND
@@ -202,7 +202,7 @@ static void __ph_print_rngmap_inner(struct rngmap_entry *rngmap, unsigned base_l
         if (!IS_RNGMAP_ENTRY_PTR(&rngmap[i]))
             __ph_printf("type: %18s", type_str[rngmap[i].type]);
         else
-            __ph_printf("type: PTR:%14p", rngmap[i].ptr);
+            __ph_printf("type: PTR %14p", rngmap[i].ptr);
         __ph_printf("│");
     }
     __ph_printf("\n");
@@ -356,9 +356,19 @@ static void __ph_set_rngmap_entry_map(struct rngmap_entry *entry, struct rngmap_
 /** Internal functions **/
 
 static struct rngmap_entry *__ph_create_rngmap_entry_inner(struct rngmap_entry *rngmap, struct rngmap_entry evalue, unsigned lv) {
+    assert(IS_RNGMAP_ENTRY_BND(&evalue));
+
     if (lv == UINT_MAX) return NULL;
 
-    struct rngmap_entry *entry = &rngmap[__ph_hash_addr(evalue.obj, lv)];
+    rngmap_index_t idx;
+    if (IS_RNGMAP_ENTRY_OBJ(&evalue))
+        idx = __ph_hash_addr(evalue.obj, lv);
+    else if (IS_RNGMAP_ENTRY_PTR(&evalue))
+        idx = __ph_hash_addr(evalue.ptr, lv);
+    else
+        assert(false);
+
+    struct rngmap_entry *entry = &rngmap[idx];
     assert(entry);
 
     if (IS_RNGMAP_ENTRY_NULL(entry) ||
@@ -441,7 +451,7 @@ static struct rngmap_entry *__ph_get_rngmap_obj_entry(void *obj) {
 
 static struct rngmap_entry *__ph_get_rngmap_ptr_entry_inner(struct rngmap_entry *rngmap, void *ptr, void *obj, unsigned lv) {
     if (!rngmap) return NULL;
-    struct rngmap_entry *entry = &rngmap[__ph_hash_addr(obj, lv)];
+    struct rngmap_entry *entry = &rngmap[__ph_hash_addr(ptr, lv)];
 
     if (IS_RNGMAP_ENTRY_MAP(entry)) {
         return __ph_get_rngmap_ptr_entry_inner(entry->obj, ptr, obj, lv + 1);
@@ -685,8 +695,8 @@ static void __ph_ptr_move(void *ptr, void *prev, size_t psize, void* next, size_
 
     // For stack pointers, only check if 'next' is still inside the stack.
     // FIXME: reimplement this in a portable way.
-    if ((intptr_t)prev & STACK_MASK) {
-        if (!(((intptr_t)next + nsize - 1) & STACK_MASK)) {
+    if (((intptr_t)prev & STACK_MASK) == STACK_MASK) {
+        if ((((intptr_t)next + nsize - 1) & STACK_MASK) != STACK_MASK) {
             is_oob = true;
 
             rng = malloc_impl(sizeof(struct range_info));

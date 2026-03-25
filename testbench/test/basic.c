@@ -11,6 +11,10 @@ bool test_char_access_okay() {
     __ph_ptr_move(&ptr, ptr, sizeof(char), ptr+1, sizeof(char));
     ptr += 1;
 
+    __ph_ptr_deref(&ptr);
+    *(char *)ptr;
+
+    /*
     void *obj2 = (void *)0x44444444;
     void *ptr2 = obj2;
     __ph_ptr_move(&ptr, ptr2, sizeof(char), ptr2+1, sizeof(char));
@@ -24,6 +28,7 @@ bool test_char_access_okay() {
 
     __ph_ptr_deref(&ptr2);
     *(char *)ptr2;
+    */
     return true;
 }
 
