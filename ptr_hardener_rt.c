@@ -34,9 +34,9 @@ enum rngmap_entry_type {
     RNGMAP_ENTRY_MAP,           // range map type
     RNGMAP_ENTRY_INB,           // inbound type
     RNGMAP_ENTRY_INBX,          // inbound type (untracked pointer only)
-    RNGMAP_ENTRY_OOB,           // out-of-bounds type
+    RNGMAP_ENTRY_OOB,
 };
-#define IS_RNGMAP_ENTRY_BND(x) ((x) > RNGMAP_ENTRY_MAP)
+#define IS_RNGMAP_ENTRY_BND(x) ((x).type > RNGMAP_ENTRY_MAP)
 
 struct range_info {
     void *base;     // Granule-aligned base address
@@ -44,7 +44,10 @@ struct range_info {
 };
 
 struct rngmap_entry {
-    enum rngmap_entry_type type;
+    union {
+        uintptr_t type;     // For 'enum rngmap_entry_type'.
+        void *ptr;          // This is valid beyond 'enum rngmap_entry_type'.
+    }; 
     void *obj;
     struct range_info *rng;
     struct rngmap_entry *oob;
@@ -205,7 +208,7 @@ static void __ph_print_rngmap_inner(struct rngmap_entry *rngmap, unsigned base_l
         __ph_printf("\n");
         for (int i = 0; i < n_entries; i++) {
             __ph_printf("│");
-            if (IS_RNGMAP_ENTRY_BND(rngmap[i].type))
+            if (IS_RNGMAP_ENTRY_BND(rngmap[i]))
                 __ph_printf("-bas: %18p", ((struct range_info *)rngmap[i].rng)->base);
             else
                 for (int c = 0; c < 24; c++) __ph_printf(" ");
@@ -214,7 +217,7 @@ static void __ph_print_rngmap_inner(struct rngmap_entry *rngmap, unsigned base_l
         __ph_printf("\n");
         for (int i = 0; i < n_entries; i++) {
             __ph_printf("│");
-            if (IS_RNGMAP_ENTRY_BND(rngmap[i].type))
+            if (IS_RNGMAP_ENTRY_BND(rngmap[i]))
                 __ph_printf("-len: %18d", ((struct range_info *)rngmap[i].rng)->len);
             else
                 for (int c = 0; c < 24; c++) __ph_printf(" ");
@@ -340,7 +343,7 @@ static void __ph_set_rngmap_entry_map(struct rngmap_entry *entry, void *rngmap) 
 /** Internal functions **/
 
 static struct rngmap_entry *__ph_create_rngmap_entry_inner(struct rngmap_entry *rngmap, struct rngmap_entry evalue, unsigned lv) {
-    assert(IS_RNGMAP_ENTRY_BND(evalue.type));
+    assert(IS_RNGMAP_ENTRY_BND(evalue));
 
     if (lv == UINT_MAX) return NULL;
 
