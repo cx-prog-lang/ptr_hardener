@@ -38,16 +38,16 @@ enum rngmap_entry_type {
 };
 #define IS_RNGMAP_ENTRY_BND(x) ((x) > RNGMAP_ENTRY_MAP)
 
-struct rngmap_entry {
-    enum rngmap_entry_type type;
-    void *obj;
-    void *rng;
-    void *oob;
-};
-
 struct range_info {
     void *base;     // Granule-aligned base address
     size_t len;     // Granule-aligned length (in bytes)
+};
+
+struct rngmap_entry {
+    enum rngmap_entry_type type;
+    void *obj;
+    struct range_info *rng;
+    struct rngmap_entry *oob;
 };
 
 #define GRANULE_SIZE        (1 << 5)
@@ -245,7 +245,7 @@ static void __ph_print_rngmap_inner(struct rngmap_entry *rngmap, unsigned base_l
     if (!stop) {
         for (int i = 0; i < n_entries; i++) {
             if (rngmap[i].type == RNGMAP_ENTRY_MAP)
-                __ph_print_rngmap_inner(rngmap[i].rng, base_lv, lv + 1, stop, RNGMAP_NR_ENTRIES, detailed);
+                __ph_print_rngmap_inner(rngmap[i].obj, base_lv, lv + 1, stop, RNGMAP_NR_ENTRIES, detailed);
         }
     }
 }
