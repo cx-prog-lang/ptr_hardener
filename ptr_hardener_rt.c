@@ -36,12 +36,11 @@ enum rngmap_entry_type {
     RNGMAP_ENTRY_INBX,          // inbound type (untracked pointer only)
     RNGMAP_ENTRY_OOB,           // out-of-bounds type
 };
-
 #define IS_RNGMAP_ENTRY_BND(x) ((x) > RNGMAP_ENTRY_MAP)
 
 struct rngmap_entry {
     enum rngmap_entry_type type;
-    void *tag;
+    void *obj;
     void *rng;
     void *oob;
 };
@@ -194,7 +193,7 @@ static void __ph_print_rngmap_inner(void *_rngmap, unsigned base_lv, unsigned lv
     __ph_printf("\n");
     for (int i = 0; i < n_entries; i++) {
         __ph_printf("│");
-        __ph_printf("tag : %18p", rngmap[i].tag);
+        __ph_printf("obj : %18p", rngmap[i].obj);
         __ph_printf("│");
     }
     __ph_printf("\n");
@@ -325,20 +324,20 @@ static struct rngmap_entry *__ph_index_rngmap_entry(void *rngmap, rngmap_index_t
 }
 
 static void __ph_set_rngmap_entry_null(struct rngmap_entry *entry) {
-    // entry->type = RNGMAP_ENTRY_NULL; entry->tag = entry->rng = entry->oob = NULL;
+    // entry->type = RNGMAP_ENTRY_NULL; entry->obj = entry->rng = entry->oob = NULL;
     memset(entry, 0, sizeof(struct rngmap_entry));
 }
 
-static void __ph_set_rngmap_entry_bnd(struct rngmap_entry *entry, enum rngmap_entry_type type, void *tag, void *rng) {
+static void __ph_set_rngmap_entry_bnd(struct rngmap_entry *entry, enum rngmap_entry_type type, void *obj, void *rng) {
     entry->type = type;
-    entry->tag = tag;
+    entry->obj = obj;
     entry->rng = rng;
     entry->oob = NULL;
 }
 
 static void __ph_set_rngmap_entry_map(struct rngmap_entry *entry, void *rngmap) {
     entry->type = RNGMAP_ENTRY_MAP;
-    entry->tag = NULL;
+    entry->obj = NULL;
     entry->rng = rngmap;
     entry->oob = NULL;
 }
@@ -350,12 +349,12 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
 
     if (lv == UINT_MAX) return NULL;
 
-    struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(evalue.tag, lv));
+    struct rngmap_entry *entry = __ph_index_rngmap_entry(rngmap, __ph_hash_addr(evalue.obj, lv));
     assert(entry);
 
     switch (entry->type) {
         case RNGMAP_ENTRY_NULL:
-            __ph_set_rngmap_entry_bnd(entry, evalue.type, evalue.tag, evalue.rng);
+            __ph_set_rngmap_entry_bnd(entry, evalue.type, evalue.obj, evalue.rng);
             __ph_print_rngmap_entry(lv, entry);
             return entry;
         case RNGMAP_ENTRY_MAP:
@@ -379,9 +378,9 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(void *rngmap, struct 
     }
 }
 
-static struct rngmap_entry *__ph_create_rngmap_entry(enum rngmap_entry_type type, void *tag, void *rng) {
+static struct rngmap_entry *__ph_create_rngmap_entry(enum rngmap_entry_type type, void *obj, void *rng) {
     if (!__ph_rngmap) return NULL;
-    struct rngmap_entry evalue = { .type = type, .tag = tag, .rng = rng };
+    struct rngmap_entry evalue = { .type = type, .obj = obj, .rng = rng };
     return __ph_create_rngmap_entry_inner(__ph_rngmap, evalue, 0);
 }
 
@@ -392,9 +391,9 @@ static bool __ph_create_rngmap_entries(void *aobj, size_t size) {
         __ph_rngmap = __ph_create_rngmap(RNGMAP_NR_ENTRIES);
 
     for (int goff = 0; goff <= size / GRANULE_SIZE; goff++) {
-        void *tag = aobj + (goff * GRANULE_SIZE);
+        void *obj = aobj + (goff * GRANULE_SIZE);
         void *rng = aobj + size;
-        void *create_res = __ph_create_rngmap_entry(RNGMAP_ENTRY_INB, tag, rng);
+        void *create_res = __ph_create_rngmap_entry(RNGMAP_ENTRY_INB, obj, rng);
         if (!create_res) return false;
     }
     
@@ -411,7 +410,7 @@ static struct rngmap_entry *__ph_get_rngmap_bnd_entry_inner(void *rngmap, void *
         case RNGMAP_ENTRY_NULL:
             return NULL;
         default:
-            if (entry->tag == obj) return entry;
+            if (entry->obj == obj) return entry;
             else return NULL;
     }
 }
@@ -421,8 +420,8 @@ static struct rngmap_entry *__ph_get_rngmap_bnd_entry(void *obj) {
     return __ph_get_rngmap_bnd_entry_inner(__ph_rngmap, obj, 0);
 }
 
-static bool __ph_destroy_rngmap_entry(void *tag) {
-    struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(tag);
+static bool __ph_destroy_rngmap_entry(void *obj) {
+    struct rngmap_entry *entry = __ph_get_rngmap_bnd_entry(obj);
     if (!entry) return false;
 
     struct rngmap_entry *oob_entry = (struct rngmap_entry *)entry->oob;
@@ -449,8 +448,8 @@ static bool __ph_destroy_rngmap_entries(void *aobj) {
 
     // Destroy all associated range map entries with 'aobj'.
     for (int goff = 0; goff < rng->len / GRANULE_SIZE; goff++) {
-        void *atag = rng->base + (goff * GRANULE_SIZE);
-        bool destroy_res = __ph_destroy_rngmap_entry(atag);
+        void *aobj = rng->base + (goff * GRANULE_SIZE);
+        bool destroy_res = __ph_destroy_rngmap_entry(aobj);
         if (!destroy_res) return false;
     }
 
