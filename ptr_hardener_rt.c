@@ -60,7 +60,6 @@ struct rngmap_entry {
     }; 
     void *obj;
     struct range_info *rng;
-    struct rngmap_entry *oob;
 };
 
 #define GRANULE_SIZE        (1 << 5)
@@ -239,12 +238,6 @@ static void __ph_print_rngmap_inner(struct rngmap_entry *rngmap, unsigned base_l
     }
     __ph_printf("\n");
     for (int i = 0; i < n_entries; i++) {
-        __ph_printf("│");
-        __ph_printf("oob : %18p", rngmap[i].oob);
-        __ph_printf("│");
-    }
-    __ph_printf("\n");
-    for (int i = 0; i < n_entries; i++) {
         __ph_printf("└");
         for (int c = 0; c < 24; c++) __ph_printf("─");
         __ph_printf("┘");
@@ -345,7 +338,7 @@ static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
 */
 
 static void __ph_set_rngmap_entry_null(struct rngmap_entry *entry) {
-    // entry->type = RNGMAP_ENTRY_NULL; entry->obj = entry->rng = entry->oob = NULL;
+    // entry->type = RNGMAP_ENTRY_NULL; entry->obj = entry->rng = NULL;
     memset(entry, 0, sizeof(struct rngmap_entry));
 }
 
@@ -353,14 +346,12 @@ static void __ph_set_rngmap_entry_bnd(struct rngmap_entry *entry, uintptr_t type
     entry->type_or_ptr = type_or_ptr;
     entry->obj = obj;
     entry->rng = rng;
-    entry->oob = NULL;
 }
 
 static void __ph_set_rngmap_entry_map(struct rngmap_entry *entry, struct rngmap_entry *rngmap) {
     entry->type = RNGMAP_ENTRY_MAP;
     entry->obj = rngmap;
     entry->rng = NULL;
-    entry->oob = NULL;
 }
 
 /** Internal functions **/
@@ -411,14 +402,14 @@ static struct rngmap_entry *__ph_create_rngmap_entry_inner(struct rngmap_entry *
 
 static struct rngmap_entry *__ph_create_rngmap_obj_entry(enum rngmap_entry_type type, void *obj, void *rng) {
     if (!__ph_rngmap) return NULL;
-    struct rngmap_entry evalue = { .type = type, .obj = obj, .rng = rng, .oob = NULL };
+    struct rngmap_entry evalue = { .type = type, .obj = obj, .rng = rng };
     assert(IS_RNGMAP_ENTRY_OBJ(&evalue));
     return __ph_create_rngmap_entry_inner(__ph_rngmap, evalue, 0);
 }
 
 static struct rngmap_entry *__ph_create_rngmap_ptr_entry(void *ptr, void *obj, void *rng) {
     if (!__ph_rngmap) return NULL;
-    struct rngmap_entry evalue = { .ptr = ptr, .obj = obj, .rng = rng, .oob = NULL };
+    struct rngmap_entry evalue = { .ptr = ptr, .obj = obj, .rng = rng };
     assert(IS_RNGMAP_ENTRY_PTR(&evalue));
     return __ph_create_rngmap_entry_inner(__ph_rngmap, evalue, 0);
 }
@@ -459,36 +450,43 @@ static struct rngmap_entry *__ph_get_rngmap_obj_entry(void *obj) {
     return __ph_get_rngmap_obj_entry_inner(__ph_rngmap, obj, 0);
 }
 
-static struct rngmap_entry *__ph_get_rngmap_ptr_entry_inner(struct rngmap_entry *rngmap, void *ptr, void *obj, unsigned lv) {
+static struct rngmap_entry *__ph_get_rngmap_ptr_entry_inner(struct rngmap_entry *rngmap, void *ptr, unsigned lv) {
     if (!rngmap) return NULL;
     struct rngmap_entry *entry = &rngmap[__ph_hash_addr(ptr, lv)];
 
     if (IS_RNGMAP_ENTRY_MAP(entry)) {
-        return __ph_get_rngmap_ptr_entry_inner(entry->obj, ptr, obj, lv + 1);
+        return __ph_get_rngmap_ptr_entry_inner(entry->obj, ptr, lv + 1);
     } else if (IS_RNGMAP_ENTRY_PTR(entry)) {
-        if (entry->obj == obj && entry->ptr == ptr) return entry;
+        if (entry->ptr == ptr) return entry;
         else return NULL;
     } else {
         return NULL;
     }
 }
 
-static struct rngmap_entry *__ph_get_rngmap_ptr_entry(void *ptr, void *obj) {
+static struct rngmap_entry *__ph_get_rngmap_ptr_entry(void *ptr) {
     if (!__ph_rngmap) return NULL;
-    return __ph_get_rngmap_ptr_entry_inner(__ph_rngmap, ptr, obj, 0);
+    return __ph_get_rngmap_ptr_entry_inner(__ph_rngmap, ptr, 0);
 }
 
 static bool __ph_destroy_rngmap_obj_entry(void *obj) {
     struct rngmap_entry *entry = __ph_get_rngmap_obj_entry(obj);
     if (!entry) return false;
 
-    struct rngmap_entry *oob_entry = (struct rngmap_entry *)entry->oob;
+    struct range_info range = *entry->rng;
     __ph_set_rngmap_entry_null(entry);
 
-    while (oob_entry) {
-        struct rngmap_entry *next_oob_entry = (struct rngmap_entry *)oob_entry->oob;
-        __ph_set_rngmap_entry_null(oob_entry);
-        oob_entry = next_oob_entry;
+    // This is when the thing is getting tricky because we should potentially
+    // destroy any entry that **may** correspond to a pointer in the deallocated
+    // object. As a naive implementation, we simply scan the object and
+    // see if there is an entry for the hypothetical pointer.
+    for (int off = 0; off < range.len - sizeof(void *) + 1; off++) {
+        void *maybe_ptr = (void *)((char *)range.base + off);
+        struct rngmap_entry *maybe_ptr_entry = __ph_get_rngmap_ptr_entry(maybe_ptr);
+        if (maybe_ptr_entry) {
+            __ph_set_rngmap_entry_null(maybe_ptr_entry);
+            off += sizeof(void *) - 1;  // A pity attempt to optimize scanning.
+        }
     }
     
     return true;
@@ -656,6 +654,8 @@ void free(void *ptr) {
     if (!destroy_res) return;
 
     free_impl(ptr);  // TODO: implement quarantine.
+
+    __ph_print_rngmap();
 }
 
 __attribute__((weak))
@@ -671,6 +671,8 @@ void free_sized(void *ptr) {
     if (!destroy_res) return;
 
     sfree_impl(ptr);  // TODO: implement quarantine.
+
+    __ph_print_rngmap();
 }
 
 __attribute__((weak))
@@ -686,6 +688,8 @@ void free_aligned_sized(void *ptr) {
     if (!destroy_res) return;
 
     asfree_impl(ptr);  // TODO: implement quarantine.
+
+    __ph_print_rngmap();
 }
 
 /** Instrumented functions **/
@@ -745,18 +749,6 @@ static void __ph_ptr_move(void *ptr, void *prev, size_t psize, void* next, size_
         struct rngmap_entry *oob_entry = 
             __ph_create_rngmap_ptr_entry(ptr, next, (void *)rng);
         if (!oob_entry) return;
-
-        // Chain 'oob_entry' to this inbound entry.
-        // FIXME: the 'oob_entry' from an untracked pointer will pile up uncleaned no matter what.
-        // This will become a problem if some of them turn into **inbound** by future allocations.
-        // IDEA: make a new range map entry type 'inb_untracked' to keep track of inbound untracked objects.
-        // When a further 'legitimate' allocation make it 'inb', overwrite this entry and clear
-        // associated 'oob' entries.
-        if (entry) {
-            while (entry->oob)
-                entry = entry->oob;
-            entry->oob = (void *)oob_entry;
-        }
     } 
 
     __ph_print_rngmap();
@@ -766,6 +758,6 @@ static void __ph_ptr_deref(void *ptr) {
     __ph_printf("__ph_ptr_deref(%p)\n", ptr);
 
     void *obj = *(void **)ptr;
-    struct rngmap_entry *entry = __ph_get_rngmap_ptr_entry(ptr, obj);
-    if (entry) raise(SIGUSR1);
+    struct rngmap_entry *entry = __ph_get_rngmap_ptr_entry(ptr);
+    if (entry && entry->obj == obj) raise(SIGUSR1);
 }

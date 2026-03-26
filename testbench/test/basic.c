@@ -34,6 +34,27 @@ bool test_char_access_okay() {
 }
 
 bool test_int_access_okay() {
+    struct Test {
+        int x;
+        char *p;
+        char y;
+        char *q;
+        char *r;
+    };
+
+    struct Test *test = malloc(sizeof(struct Test));
+    char *buf = malloc(10);
+    test->p = buf;
+    test->q = buf;
+    test->r = buf;
+
+    __ph_ptr_move(&test->p, test->p, sizeof(char), test->p + 20, sizeof(char));
+    test->p += 20;
+
+    //__ph_ptr_deref(&test->p);
+    //*test->p;
+
+    free(test);
     return true;
 }
 

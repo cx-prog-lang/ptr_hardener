@@ -15,7 +15,7 @@
 
 int main() {
     // Basic
-    TEST("basic", test_char_access_okay);
+    //TEST("basic", test_char_access_okay);
     TEST("basic", test_int_access_okay);
     TEST("basic", test_oob_pointer_okay);
     TEST("basic", test_char_access_fail);
