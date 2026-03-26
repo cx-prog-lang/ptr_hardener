@@ -469,26 +469,29 @@ static struct rngmap_entry *__ph_get_rngmap_ptr_entry(void *ptr) {
     return __ph_get_rngmap_ptr_entry_inner(__ph_rngmap, ptr, 0);
 }
 
-static bool __ph_destroy_rngmap_obj_entry(void *obj) {
-    struct rngmap_entry *entry = __ph_get_rngmap_obj_entry(obj);
+static bool __ph_destroy_rngmap_ptr_entry(void *ptr) {
+    struct rngmap_entry *entry = __ph_get_rngmap_ptr_entry(ptr);
     if (!entry) return false;
-
-    struct range_info range = *entry->rng;
     __ph_set_rngmap_entry_null(entry);
+    return true;
+}
 
+static bool __ph_destroy_rngmap_ptr_entries(void *ptr, size_t len) {
     // This is when the thing is getting tricky because we should potentially
     // destroy any entry that **may** correspond to a pointer in the deallocated
     // object. As a naive implementation, we simply scan the object and
     // see if there is an entry for the hypothetical pointer.
-    for (int off = 0; off < range.len - sizeof(void *) + 1; off++) {
-        void *maybe_ptr = (void *)((char *)range.base + off);
-        struct rngmap_entry *maybe_ptr_entry = __ph_get_rngmap_ptr_entry(maybe_ptr);
-        if (maybe_ptr_entry) {
-            __ph_set_rngmap_entry_null(maybe_ptr_entry);
+    for (int off = 0; off < len - sizeof(void *) + 1; off++) {
+        void *maybe_ptr = (void *)((char *)ptr + off);
+        if (__ph_destroy_rngmap_ptr_entry(maybe_ptr))
             off += sizeof(void *) - 1;  // A pity attempt to optimize scanning.
-        }
     }
-    
+}
+
+static bool __ph_destroy_rngmap_obj_entry(void *obj) {
+    struct rngmap_entry *entry = __ph_get_rngmap_obj_entry(obj);
+    if (!entry) return false;
+    __ph_set_rngmap_entry_null(entry);
     return true;
 }
 
@@ -498,18 +501,18 @@ static bool __ph_destroy_rngmap_obj_entries(void *aobj) {
     // Get the range of the current 'aobj'.
     struct rngmap_entry *entry = __ph_get_rngmap_obj_entry(aobj);
     if (!entry) return true;    // Maybe untracked object. Ignore.
-
-    struct range_info *rng = entry->rng;
-    assert(rng);
+    assert(entry->rng);
+    struct range_info rng = *entry->rng;
 
     // Destroy all associated range map entries with 'aobj'.
-    for (int goff = 0; goff < rng->len / GRANULE_SIZE; goff++) {
-        void *aobj = rng->base + (goff * GRANULE_SIZE);
+    for (int goff = 0; goff < rng.len / GRANULE_SIZE; goff++) {
+        void *aobj = rng.base + (goff * GRANULE_SIZE);
         bool destroy_res = __ph_destroy_rngmap_obj_entry(aobj);
         if (!destroy_res) return false;
     }
 
-    return true;
+    // Destroy all entries for the pointers in this object.
+    return __ph_destroy_rngmap_ptr_entries(rng.base, rng.len);
 }
 
 static size_t __ph_extend_w_range_info_granule_alignable(size_t size) {
