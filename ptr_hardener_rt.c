@@ -309,13 +309,9 @@ static void *__ph_create_rngmap(unsigned n_entries) {
 
 // FIXME: optimize this.
 static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
-    for (int i = 0; i < sizeof(void *) - sizeof(unsigned) + 1; i++)
-        seed += *(unsigned *)(((char *)&addr) + i);
-    srand((uintptr_t)addr + seed);
-
+    srand(((uintptr_t)addr + seed) % (uintptr_t)UINT_MAX);
     rngmap_index_t hash = rand();
     hash %= RNGMAP_NR_ENTRIES;
-
     return hash;
 }
 
