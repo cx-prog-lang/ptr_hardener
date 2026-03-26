@@ -476,16 +476,20 @@ static bool __ph_destroy_rngmap_ptr_entry(void *ptr) {
     return true;
 }
 
-static bool __ph_destroy_rngmap_ptr_entries(void *ptr, size_t len) {
+// ptr: the beginning of a potential pointer address.
+// stride: desired increment limit to 'ptr'.
+static bool __ph_destroy_rngmap_ptr_entries(void *ptr, size_t stride) {
     // This is when the thing is getting tricky because we should potentially
     // destroy any entry that **may** correspond to a pointer in the deallocated
     // object. As a naive implementation, we simply scan the object and
     // see if there is an entry for the hypothetical pointer.
-    for (int off = 0; off < len - sizeof(void *) + 1; off++) {
+    for (int off = 0; off <= stride; off++) {
         void *maybe_ptr = (void *)((char *)ptr + off);
         if (__ph_destroy_rngmap_ptr_entry(maybe_ptr))
             off += sizeof(void *) - 1;  // A pity attempt to optimize scanning.
     }
+
+    return true;
 }
 
 static bool __ph_destroy_rngmap_obj_entry(void *obj) {
@@ -512,7 +516,12 @@ static bool __ph_destroy_rngmap_obj_entries(void *aobj) {
     }
 
     // Destroy all entries for the pointers in this object.
-    return __ph_destroy_rngmap_ptr_entries(rng.base, rng.len);
+    if (rng.len >= sizeof(void *)) { 
+        size_t stride = rng.len - sizeof(void *);
+        return __ph_destroy_rngmap_ptr_entries(rng.base, rng.len);
+    } else {
+        return true;
+    }
 }
 
 static size_t __ph_extend_w_range_info_granule_alignable(size_t size) {
