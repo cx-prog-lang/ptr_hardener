@@ -11,10 +11,11 @@ bool test_char_access_okay() {
     __ph_ptr_move(&ptr, ptr, sizeof(char), ptr+1, sizeof(char));
     ptr += 1;
 
+    /*
     __ph_ptr_deref(&ptr);
     *(char *)ptr;
+    */
 
-    /*
     void *obj2 = (void *)0x44444444;
     void *ptr2 = obj2;
     __ph_ptr_move(&ptr, ptr2, sizeof(char), ptr2+1, sizeof(char));
@@ -24,11 +25,11 @@ bool test_char_access_okay() {
     ptr2 += 2;
 
     __ph_ptr_move(NULL, &a, sizeof(int), &a+2, sizeof(int));
-    __ph_ptr_move(ptr2, &a, sizeof(int), ptr2+5, sizeof(int));
+    __ph_ptr_move(&ptr2, &a, sizeof(int), ptr2+5, sizeof(int));
+    ptr2 += 5;
 
     __ph_ptr_deref(&ptr2);
     *(char *)ptr2;
-    */
     return true;
 }
 

@@ -309,6 +309,19 @@ static void *__ph_create_rngmap(unsigned n_entries) {
 
 // FIXME: optimize this.
 static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
+    for (int i = 0; i < sizeof(void *) - sizeof(unsigned) + 1; i++)
+        seed += *(unsigned *)(((char *)&addr) + i);
+    srand((uintptr_t)addr + seed);
+
+    rngmap_index_t hash = rand();
+    hash %= RNGMAP_NR_ENTRIES;
+
+    return hash;
+}
+
+/*
+// FIXME: optimize this.
+static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
     uintptr_t addr_w_seed = (uintptr_t)addr + seed;
     char *_addr_w_seed = (char *)&addr_w_seed;
 
@@ -333,6 +346,7 @@ static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
 
     return ret;
 }
+*/
 
 static void __ph_set_rngmap_entry_null(struct rngmap_entry *entry) {
     // entry->type = RNGMAP_ENTRY_NULL; entry->obj = entry->rng = entry->oob = NULL;
@@ -681,9 +695,12 @@ void free_aligned_sized(void *ptr) {
 /** Instrumented functions **/
 
 // TODO: obj map (inbound), ptr map (oob)
+// TODO: release ptr entries when ptr is released. (heap: free, stack: return) [stack ptr: ptr type or address-taken]
 // TODO: stack blob range
 // TODO: untracked pointer tolerance
 // TODO: untracked entry --> overwritten by tracked entry creation
+// TODO: UAF detection: memset and mprotect when free.
+// TODO: UAF countermeasure: don't "free" deallocated objects. Always reuse them once it's been allocated.
 
 static void __ph_ptr_move(void *ptr, void *prev, size_t psize, void* next, size_t nsize) {
     __ph_printf("__ph_ptr_move(%p, %p, %d, %p, %d)\n", ptr, prev, psize, next, nsize);
