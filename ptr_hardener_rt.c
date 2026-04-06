@@ -414,6 +414,11 @@ static void __ph_objmap_entry_print(unsigned base_lv,
     __ph_objmap_print_inner(entry, base_lv, 0, true, 1);
 }
 
+static void __ph_map_print() {
+    __ph_objmap_print();
+    __ph_ptrmap_print();
+}
+
 /** General utilities **/
 
 static map_index_t __ph_hash_addr(void *addr, unsigned seed) {
@@ -647,23 +652,6 @@ static bool __ph_objmap_create_entries(void *base, size_t size) {
     return true;
 }
 
-static void *__ph_objmap_create_entries_or_cleanup(void *aobj, size_t size) {
-    assert((intptr_t)aobj % __PH_GRANULE_SIZE == 0);
-
-    bool init_res = __ph_objmap_create_entries(aobj, size);
-    if (!init_res) {
-        if (!free_impl) {
-            free_impl = dlsym(RTLD_NEXT, "free");
-            if (!free_impl) return NULL;
-        }
-
-        free_impl(aobj);
-        return NULL;
-    }
-
-    return aobj;
-}
-
 static struct objmap_entry *__ph_objmap_get_entry_inner(struct objmap_entry *objmap, void *obj, unsigned lv) {
     if (!objmap) return NULL;
     struct objmap_entry *entry = &objmap[__ph_hash_addr(obj, lv)];
@@ -715,6 +703,38 @@ static bool __ph_objmap_destroy_entries(void *tag) {
     }
 }
 
+/** Internal **/
+
+static void *__ph_objmap_create_entries_or_cleanup(void *aobj, size_t size) {
+    assert((intptr_t)aobj % __PH_GRANULE_SIZE == 0);
+
+    bool init_res = __ph_objmap_create_entries(aobj, size);
+    if (!init_res) {
+        if (!free_impl) {
+            free_impl = dlsym(RTLD_NEXT, "free");
+            if (!free_impl) return NULL;
+        }
+
+        free_impl(aobj);
+        return NULL;
+    }
+
+    return aobj;
+}
+
+static void __ph_free_inner(void *ptr, void (**)(void *) _impl, const char *impl_name) {
+    if (!*_impl) {
+        *_impl = dlsym(RTLD_NEXT, "free");
+        if (!*_impl) return;
+    }
+
+    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
+    bool destroy_res = __ph_objmap_destroy_entries(aptr);
+    if (!destroy_res) return;
+
+    (*_impl)(ptr);
+}
+
 /** Interface **/
 
 __attribute__((weak))
@@ -736,7 +756,7 @@ void *malloc(size_t size) {
 
     void *ret = __ph_objmap_create_entries_or_cleanup(aobj, size);
 
-    __ph_print_rngmap();
+    __ph_map_print();
 
     return ret;
 }
@@ -762,7 +782,7 @@ void *calloc(size_t num, size_t esize) {
     size_t asize = __PH_GRANULE_CEIL(size);
     void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
 
-    __ph_print_rngmap();
+    __ph_map_print();
 
     return ret;
 }
@@ -786,7 +806,7 @@ void *aligned_alloc(size_t align, size_t size) {
     size_t asize = __PH_GRANULE_CEIL(size);
     void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
 
-    __ph_print_rngmap();
+    __ph_map_print();
 
     return ret;
 }
@@ -816,7 +836,7 @@ void *realloc(void *ptr, size_t size) {
 
     void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
 
-    __ph_print_rngmap();
+    __ph_map_print();
 
     return ret;
 }
@@ -824,55 +844,22 @@ void *realloc(void *ptr, size_t size) {
 __attribute__((weak))
 void free(void *ptr) {
     __ph_printf("free(%p)\n", ptr);
-
-    if (!free_impl) {
-        free_impl = dlsym(RTLD_NEXT, "free");
-        if (!free_impl) return;
-    }
-
-    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
-    bool destroy_res = __ph_objmap_destroy_entries(aptr);
-    if (!destroy_res) return;
-
-    free_impl(ptr);
-
-    __ph_print_rngmap();
+    __ph_free(ptr, &free_impl, "free");
+    __ph_map_print();
 }
 
 __attribute__((weak))
 void free_sized(void *ptr) {
     __ph_printf("free_sized(%p)\n", ptr);
-
-    if (!sfree_impl) {
-        sfree_impl = dlsym(RTLD_NEXT, "free_sized");
-        if (!sfree_impl) return;
-    }
-
-    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
-    bool destroy_res = __ph_objmap_destroy_entries(aptr);
-    if (!destroy_res) return;
-
-    sfree_impl(ptr);
-
-    __ph_print_rngmap();
+    __ph_free(ptr, &sfree_impl, "free_sized");
+    __ph_map_print();
 }
 
 __attribute__((weak))
 void free_aligned_sized(void *ptr) {
     __ph_printf("free_aligned_sized(%p)\n", ptr);
-
-    if (!asfree_impl) {
-        asfree_impl = dlsym(RTLD_NEXT, "free_aligned_sized");
-        if (!asfree_impl) return;
-    }
-
-    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
-    bool destroy_res = __ph_objmap_destroy_entries(aptr);
-    if (!destroy_res) return;
-
-    asfree_impl(ptr);
-
-    __ph_print_rngmap();
+    __ph_free(ptr, &asfree_impl, "free_aligned_sized");
+    __ph_map_print();
 }
 
 static void __ph_ptr_update(void *eetag, void *eeaddr, void *ertag) {
