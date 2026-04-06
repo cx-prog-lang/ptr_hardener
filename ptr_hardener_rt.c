@@ -67,6 +67,8 @@ struct ptrmap_entry {
     void *prev; /* Assoc. ptrs: previous entry. */
 };
 
+typedef uint64_t map_index_t;
+
 // NOTE: reduced for debugging. Original "1 << 16".
 #define __PH_OBJMAP_NR_ENTRIES (1 << 3)
 #define __PH_PTRMAP_NR_ENTRIES (1 << 3)
@@ -76,9 +78,9 @@ struct ptrmap_entry {
 #define __PH_GRANULE_MASK (__PH_GRANULE_SIZE - 1)
 
 #define __PH_GRANULE_CEIL(x)                                                   \
-    (((intptr_t)(x) + __PH_GRANULE_MASK) & ~(intptr_t)__PH_GRANULE_MASK)
+    (((intptr_t)(x) + __PH_GRANULE_SIZE - 1) & ~(intptr_t)__PH_GRANULE_MASK)
 #define __PH_GRANULE_FLOOR(x)                                                  \
-    ((intptr_t)(x) & ~(intptr_t)(__PH_GRANULE_SIZE - 1))
+    ((intptr_t)(x) & ~(intptr_t)__PH_GRANULE_MASK)
 
 // Actual standard allocators. The default behavior is to initialize them when
 // they're used the first time, but they _may_ be updated by a global
@@ -93,6 +95,25 @@ void *(*realloc_impl)(void *, size_t) __attribute__((weak)); // 'realloc'
 void (*free_impl)(void *) __attribute__((weak));             // 'free'
 void (*sfree_impl)(void *) __attribute__((weak));            // 'free_sized'
 void (*asfree_impl)(void *) __attribute__((weak)); // 'free_aligned_sized'
+
+// Untracked object tolerance
+#define __PH_UNTRACKED_OBJ_TOLERANCE (1 << 6)
+
+// Stack handling 
+// FIXME: reimplement this in a portable way.
+#define __PH_STACK_MASK (0x700000000000)
+#define __PH_STACK_BASE ((void *)__PH_STACK_MASK)
+#define __PH_STACK_LEN  (0x0fffffffffff)
+
+#define __PH_IS_STACKADDR(addr) \
+    (((intptr_t)(addr) & __PH_STACK_MASK) == __PH_STACK_MASK)
+
+const static struct objmap_entry __ph_stack_obj = {
+    .tag = __PH_STACK_BASE,
+    .base = __PH_STACK_BASE,
+    .len = __PH_STACK_LEN,
+    .next = NULL
+};
 
 /** Debug utilities **/
 
@@ -395,12 +416,17 @@ static void __ph_objmap_entry_print(unsigned base_lv,
 
 /** General utilities **/
 
-static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
+static map_index_t __ph_hash_addr(void *addr, unsigned seed) {
     // FIXME: optimize this with a number sequence visible to this TU.
     srand(((uintptr_t)addr + seed) % (uintptr_t)UINT_MAX);
-    rngmap_index_t hash = rand();
+    map_index_t hash = rand();
     hash %= RNGMAP_NR_ENTRIES;
     return hash;
+}
+
+static size_t __ph_extend_granule_alignable(size_t size) {
+    return (__PH_GRANULE_SIZE - 1)     // Object alignment slack
+            + size;                    // Object itself
 }
 
 /** Pointer map **/
@@ -504,13 +530,6 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry_from_obj(void *tag, struct 
     return __ph_ptrmap_entry_insert_to_list(ret, (struct ptrmap_entry *)obj);
 }
 
-static struct ptrmap_entry *__ph_ptrmap_update_entry_loose(void *tag) {
-    if (!__ph_ptrmap) return NULL;
-    struct ptrmap_entry evalue = {.tag = tag, .base = NULL, .len = SIZE_MAX};
-    struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
-    return ret;
-}
-
 static struct ptrmap_entry *__ph_ptrmap_get_entry_inner(struct ptrmap_entry *ptrmap, void *tag, unsigned lv) {
     if (!ptrmap) return NULL;
     struct ptrmap_entry *entry = &ptrmap[__ph_hash_addr(tag, lv)];
@@ -595,35 +614,85 @@ static bool __ph_objmap_create_entries(void *base, size_t size) {
     if (!__ph_objmap) 
         __ph_objmap = __ph_create_objmap(__PH_OBJMAP_NR_ENTRIES);
 
-    for (int goff = 0; goff <= size / __PH_GRANULE_SIZE; goff++) {
-        void *_tag = base + (goff * __PH_GRANULE_SIZE);
-        struct objmap_entry evalue = { .tag = tag, .base = base, .len = len };
+    void *abase = (void *)__PH_GRANULE_CEIL(base);
+
+    if (abase > base) {
+        // Create entries per byte for the under-occupied granule below.
+        for (int off = 0; base + off < abase; off++) {
+            void *_tag = base + off;
+            struct objmap_entry evalue = { .tag = _tag, .base = base, .len = len };
+            void *create_res = __ph_objmap_create_entry(__ph_objmap, evalue, 0);
+            if (!create_res) return false;
+        }
+    }
+
+    int goff = 0
+    for (; goff <= size / __PH_GRANULE_SIZE; goff++) {
+        void *_tag = abase + (goff * __PH_GRANULE_SIZE);
+        struct objmap_entry evalue = { .tag = _tag, .base = base, .len = len };
         void *create_res = __ph_objmap_create_entry(__ph_objmap, evalue, 0);
         if (!create_res) return false;
+    }
+
+    if (abase + (goff * __PH_GRANULE_SIZE) < base + size) {
+        // Create entries per byte for the under-occupied granule above.
+        for (void *_tag = abase + (goff * __PH_GRANULE_SIZE); 
+             _tag < base + size; _tag++) {
+            struct objmap_entry evalue = { .tag = _tag, .base = base, .len = len };
+            void *create_res = __ph_objmap_create_entry(__ph_objmap, evalue, 0);
+            if (!create_res) return false;
+        }
     }
     
     return true;
 }
 
-static struct objmap_entry *__ph_objmap_get_entry_inner(struct objmap_entry *objmap, void *aobj, unsigned lv) {
+static void *__ph_objmap_create_entries_or_cleanup(void *aobj, size_t size) {
+    assert((intptr_t)aobj % __PH_GRANULE_SIZE == 0);
+
+    bool init_res = __ph_objmap_create_entries(aobj, size);
+    if (!init_res) {
+        if (!free_impl) {
+            free_impl = dlsym(RTLD_NEXT, "free");
+            if (!free_impl) return NULL;
+        }
+
+        free_impl(aobj);
+        return NULL;
+    }
+
+    return aobj;
+}
+
+static struct objmap_entry *__ph_objmap_get_entry_inner(struct objmap_entry *objmap, void *obj, unsigned lv) {
     if (!objmap) return NULL;
-    struct objmap_entry *entry = &objmap[__ph_hash_addr(aobj, lv)];
+    struct objmap_entry *entry = &objmap[__ph_hash_addr(obj, lv)];
 
     if (__PH_MAPENT_IS_MAP(entry)) {
-        return __ph_objmap_get_entry_inner(__PH_MAPENT_GET_MAP(entry), aobj, lv + 1);
-    } else if (entry->tag == aobj) {
+        return __ph_objmap_get_entry_inner(__PH_MAPENT_GET_MAP(entry), obj, lv + 1);
+    } else if (entry->tag == obj) {
         return entry;
     } else {
         return NULL;
     }
 }
 
-// Return: the corresponding object to 'obj'.
-// Note: 'obj' doesn't need to be granule-aligned!
 static struct objmap_entry *__ph_objmap_get_entry(void *obj) {
     if (!__ph_objmap) return NULL;
+
+    struct objmap_entry *ret = NULL;
+
+    // Common case: try with aligned 'obj'.
     void *aobj = (void *)__PH_GRANULE_FLOOR(obj);
-    return __ph_objmap_get_entry_inner(__ph_objmap, aobj, 0);
+    ret = __ph_objmap_get_entry_inner(__ph_objmap, aobj, 0);
+    if (ret) return ret;
+
+    // Exceptional case: try with raw 'obj'.
+    ret = __ph_objmap_get_entry_inner(__ph_objmap, obj, 0);
+    if (ret) return ret;
+    
+    // Give up.
+    return NULL;
 }
 
 static bool __ph_objmap_destroy_entries(void *tag) {
@@ -648,7 +717,168 @@ static bool __ph_objmap_destroy_entries(void *tag) {
 
 /** Interface **/
 
-static void __ph_ptr_update(void *eetag, void *eeval, void *ertag) {
+__attribute__((weak))
+void *malloc(size_t size) {
+    __ph_printf("malloc(%d)\n", size);
+
+    if (!malloc_impl) {
+        malloc_impl = dlsym(RTLD_NEXT, "malloc");
+        if (!malloc_impl) return NULL;
+    }
+
+    size_t alignable_size = __ph_extend_granule_alignable(size);
+    if (alignable_size < size) return NULL;
+    void *obj = malloc_impl(alignable_size);
+    if (!obj) return NULL;
+
+    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
+    if (size == 1024) return aobj;      // FIXME: God awful stopgap (from libc) 
+
+    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, size);
+
+    __ph_print_rngmap();
+
+    return ret;
+}
+
+__attribute__((weak))
+void *calloc(size_t num, size_t esize) {
+    __ph_printf("calloc(%d, %d)\n", num, esize);
+
+    if (!calloc_impl) {
+        calloc_impl = dlsym(RTLD_NEXT, "calloc");
+        if (!calloc_impl) return NULL;
+    }
+
+    size_t size = num * esize;
+    if (size < esize) return NULL;
+    size_t alignable_size = __ph_extend_granule_alignable(size);
+    if (alignable_size < size) return NULL;
+    size_t aligned_num = (alignable_size + esize - 1) / esize;
+    void *obj = calloc_impl(aligned_num, esize);
+    if (!obj) return NULL;
+
+    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
+    size_t asize = __PH_GRANULE_CEIL(size);
+    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
+
+    __ph_print_rngmap();
+
+    return ret;
+}
+
+__attribute__((weak))
+void *aligned_alloc(size_t align, size_t size) {
+    __ph_printf("aligned_alloc(%d, %d)\n", align, size);
+
+    if (!aalloc_impl) {
+        aalloc_impl = dlsym(RTLD_NEXT, "aligned_alloc");
+        if (!aalloc_impl) return NULL;
+    }
+
+    size_t alignable_size = __ph_extend_granule_alignable(size);
+    if (alignable_size < size) return NULL;
+    size_t aligned_alignable_size = (alignable_size + align - 1) & ~((size_t)(align - 1));
+    void *obj = aalloc_impl(align, aligned_alignable_size);
+    if (!obj) return NULL;
+
+    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
+    size_t asize = __PH_GRANULE_CEIL(size);
+    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
+
+    __ph_print_rngmap();
+
+    return ret;
+}
+
+__attribute__((weak))
+void *realloc(void *ptr, size_t size) {
+    __ph_printf("realloc(%p, %d)\n", ptr, size);
+
+    if (!realloc_impl) {
+        realloc_impl = dlsym(RTLD_NEXT, "realloc");
+        if (!realloc_impl) return NULL;
+    }
+
+    bool destroy_res = __ph_objmap_destroy_entries(ptr);
+    if (!destroy_res) return NULL;
+
+    size_t alignable_size = __ph_extend_granule_alignable(size);
+    if (alignable_size < size) return NULL;
+    void *obj = realloc(ptr, alignable_size);
+    if (!obj) return NULL;
+
+    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
+    size_t asize = __PH_GRANULE_CEIL(size);
+
+    if (aobj != obj)
+        memmove(aobj, obj, size);
+
+    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
+
+    __ph_print_rngmap();
+
+    return ret;
+}
+
+__attribute__((weak))
+void free(void *ptr) {
+    __ph_printf("free(%p)\n", ptr);
+
+    if (!free_impl) {
+        free_impl = dlsym(RTLD_NEXT, "free");
+        if (!free_impl) return;
+    }
+
+    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
+    bool destroy_res = __ph_objmap_destroy_entries(aptr);
+    if (!destroy_res) return;
+
+    free_impl(ptr);
+
+    __ph_print_rngmap();
+}
+
+__attribute__((weak))
+void free_sized(void *ptr) {
+    __ph_printf("free_sized(%p)\n", ptr);
+
+    if (!sfree_impl) {
+        sfree_impl = dlsym(RTLD_NEXT, "free_sized");
+        if (!sfree_impl) return;
+    }
+
+    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
+    bool destroy_res = __ph_objmap_destroy_entries(aptr);
+    if (!destroy_res) return;
+
+    sfree_impl(ptr);
+
+    __ph_print_rngmap();
+}
+
+__attribute__((weak))
+void free_aligned_sized(void *ptr) {
+    __ph_printf("free_aligned_sized(%p)\n", ptr);
+
+    if (!asfree_impl) {
+        asfree_impl = dlsym(RTLD_NEXT, "free_aligned_sized");
+        if (!asfree_impl) return;
+    }
+
+    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
+    bool destroy_res = __ph_objmap_destroy_entries(aptr);
+    if (!destroy_res) return;
+
+    asfree_impl(ptr);
+
+    __ph_print_rngmap();
+}
+
+static void __ph_ptr_update(void *eetag, void *eeaddr, void *ertag) {
+    __ph_printf("__ph_ptr_update(%p, %p, %p)\n", eetag, eeaddr, ertag);
+    assert(*(void **)eetag == eeaddr);
+
     if (!__ph_ptrmap) 
         __ph_ptrmap = __ph_ptrmap_create(__PH_PTRMAP_NR_ENTRIES);
 
@@ -662,13 +892,42 @@ static void __ph_ptr_update(void *eetag, void *eeval, void *ertag) {
 
     // Case 2: from tracked object.
     // Copy range information from the object.
-    struct objmap_entry *oent = (eeval) ? __ph_objent_get_entry(eeval) : NULL;
+    struct objmap_entry *oent = (eeaddr) ? __ph_objent_get_entry(eeaddr) : NULL;
     if (oent) {
         __ph_ptrmap_update_entry_from_obj(eetag, oent);
         return;
     }
 
-    // Case 3: from untracked pointer & object.
-    // Make it a loose pointer.
-    __ph_ptrmap_update_entry_loose(eetag);
+    // Case 3: from stack object.
+    // Copy range information from the stack bulk (create one if none).
+    if (__PH_IS_STACKADDR(eeaddr)) {
+        __ph_ptrmap_update_entry_from_obj(eetag, &__ph_stack_obj);
+        return;
+    }
+
+    // Case 4: from untracked pointer & object.
+    // Make an untracked object at 'eeaddr'.
+    oent = __ph_objmap_create_entries(eeaddr, __PH_UNTRACKED_OBJ_TOLERANCE);
+    if (oent) { 
+        __ph_ptrmap_update_entry_from_obj(eetag, oent);
+        return;
+    }
+
+    assert(false);
+}
+
+static void __ph_ptr_deref(void *tag, void *addr, size_t size) {
+    __ph_printf("__ph_ptr_deref(%p, %p, %d)\n", tag, addr, size);
+    assert(*(void **)tag == addr);
+
+    struct ptrmap_entry *entry = __ph_ptrmap_get_entry(tag);
+    if (!entry) {
+        // For now, untracked pointers receive an auto-generated untracked object (if possible).
+        struct objmap_entry *oent = __ph_objmap_create_entries(addr, __PH_UNTRACKED_OBJ_TOLERANCE);
+        assert(oent);
+        entry = __ph_ptrmap_update_entry_from_obj(tag, oent);
+    }
+
+    if (!(entry->base <= addr && addr + size <= entry->base + entry->len))
+        raise(SIGUSR1);
 }
