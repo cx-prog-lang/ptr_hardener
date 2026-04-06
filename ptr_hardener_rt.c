@@ -34,33 +34,22 @@
 /** Type/constant declarations **/
 
 // Generic map entry: range information and associated pointers.
-//  - base == len == 0 && next == NULL: null entry (=no object)
-//  - base == len == 0 && next != NULL: map entry ('next' = nested map)
-//  - otherwise: range entry (=object's range)
+//  - tag == NULL:  null entry (=no object)
+//  - tag == 1:     map entry ('next' = nested map)
+//  - otherwise:    range entry (=object's range)
 #define COMMON_MAP_ENTRY                                                       \
     struct {                                                                   \
+        void *tag;  /* Hash tag: the address of this granule. */ \
         void *base; /* Range: base address. */                                 \
         size_t len; /* Range: length (in bytes). */                            \
         void *next; /* Assoc. ptrs: next entry. */                             \
     }
 
-#define __PH_MAPENT_SET_NULL(entry)                                            \
-    do {                                                                       \
-        (entry)->base = NULL;                                                  \
-        (entry)->len = 0;                                                      \
-        (entry)->next = NULL;                                                  \
-    } while (0);
-#define __PH_MAPENT_IS_NULL(entry)                                             \
-    ((entry)->base == NULL && (entry)->len == 0 && (entry)->next == NULL)
+#define __PH_MAPENT_SET_NULL(entry) ((entry)->tag = NULL) 
+#define __PH_MAPENT_IS_NULL(entry) ((entry)->tag == NULL)
 
-#define __PH_MAPENT_SET_MAP(entry, map)                                        \
-    do {                                                                       \
-        (entry)->base = NULL;                                                  \
-        (entry)->len = 0;                                                      \
-        (entry)->next = (map);                                                 \
-    } while (0);
-#define __PH_MAPENT_IS_MAP(entry)                                              \
-    ((entry)->base == NULL && (entry)->len == 0 && (entry)->next != NULL)
+#define __PH_MAPENT_SET_MAP(entry, map) ((entry)->tag = (void *)1)
+#define __PH_MAPENT_IS_MAP(entry) ((entry)->tag == (void *)1)
 #define __PH_MAPENT_GET_MAP(entry)                                             \
     (assert(__PH_MAPENT_IS_MAP(entry), (entry)->next)
 
@@ -76,7 +65,6 @@ struct objmap_entry {
 struct ptrmap_entry {
     COMMON_MAP_ENTRY;
     void *prev; /* Assoc. ptrs: previous entry. */
-    void *tag;  /* Hash tag: the address of this ptr. */
 };
 
 // NOTE: reduced for debugging. Original "1 << 16".
@@ -415,19 +403,6 @@ static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
     return hash;
 }
 
-/** General map manipulation **/
-
-#define __PH_DEF_MAP_CREATE(kind)                                              \
-    static void *__ph_##kind##_create(unsigned n_entries) {                    \
-        assert(malloc_impl);                                                   \
-        unsigned size = n_entries * sizeof(struct kind##_entry);               \
-        void *ret = malloc_impl(size);                                         \
-        if (!ret)                                                              \
-            return 0;                                                          \
-        memset(ret, 0, size);                                                  \
-        return ret;                                                            \
-    }
-
 /** Pointer map **/
 
 // Global pointer map: the entry point of the pointer/object map. On a hash
@@ -436,7 +411,15 @@ static rngmap_index_t __ph_hash_addr(void *addr, unsigned seed) {
 // would share the same storage space.
 void *__ph_ptrmap __attribute__((weak));
 
-__PH_DEF_MAP_CREATE(ptrmap);
+static void *__ph_ptrmap_create(unsigned n_entries) {
+    assert(malloc_impl);
+    unsigned size = n_entries * sizeof(struct ptrmap_entry);
+    void *ret = malloc_impl(size);
+    if (!ret)
+        return 0;
+    memset(ret, 0, size);
+    return ret;
+}
 
 static struct ptrmap_entry *__ph_ptrmap_entry_insert_to_list(struct ptrmap_entry *this,
                                              struct ptrmap_entry *prev) {
@@ -456,7 +439,7 @@ static struct ptrmap_entry *__ph_ptrmap_entry_remove_from_list(struct ptrmap_ent
     return this;
 }
 
-static struct ptrmap_entry *__ph_ptrmap_update_entry_inner(
+static struct ptrmap_entry *__ph_ptrmap_update_entry(
     struct ptrmap_entry *ptrmap, struct ptrmap_entry evalue, unsigned lv) {
     assert(!__PH_MAPENT_IS_NULL(&evalue));
 
@@ -464,19 +447,25 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry_inner(
         return NULL;
 
     ptrmap_index_t idx = __ph_hash_addr(evalue.tag, lv);
-    assert(0 <= idx && idx < (mapsize));
+    assert(0 <= idx && idx < __PH_PTRMAP_NR_ENTRIES);
     struct ptrmap_entry *entry = &ptrmap[idx];
 
     if (__PH_MAPENT_IS_NULL(entry) ||
         (__PH_MAPENT_IS_RANGE(entry) && entry->tag == evalue.tag)) {
-        __PH_MAPENT_SET_RANGE(entry, evalue.tag, evalue.base, evalue.len);
+        if (__PH_MAPENT_IS_RANGE(entry) && entry->tag == evalue.tag) { 
+            if (!__ph_ptrmap_entry_remove_from_list(entry))
+                return NULL;
+        }
+        entry->base = evalue.base;
+        entry->len = evalue.len;
         __ph_ptrmap_print_entry(lv, entry);
         return entry;
     } else if (__PH_MAPENT_IS_MAP(entry)) {
-        return __ph_ptrmap_update_entry_inner(entry->tag, evalue,
+        return __ph_ptrmap_update_entry(__PH_MAPENT_GET_MAP(entry), evalue,
                                                 lv + 1);
     } else /* range entry */ {
-        assert(__PH_MAPENT_IS_RANGE(entry) && entry->tag != evalue.tag);
+        assert(__PH_MAPENT_IS_RANGE(entry));
+        assert(entry->tag != evalue.tag);
 
         struct ptrmap_entry prev_evalue = *entry;
         void *new_ptrmap = __ph_create_ptrmap(__PH_ptrmap_NR_ENTRIES);
@@ -485,13 +474,13 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry_inner(
 
         __PH_MAPENT_SET_MAP(entry, new_ptrmap);
 
-        struct ptrmap_entry *entry1 = __ph_ptrmap_update_entry_inner(
+        struct ptrmap_entry *entry1 = __ph_ptrmap_update_entry(
             new_ptrmap, prev_evalue, lv + 1);
         if (!entry1)
             return NULL;
 
         struct ptrmap_entry *entry2 =
-            __ph_ptrmap_update_entry_inner(new_ptrmap, evalue, lv + 1);
+            __ph_ptrmap_update_entry(new_ptrmap, evalue, lv + 1);
         if (!entry2)
             return NULL;
 
@@ -503,22 +492,22 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry_inner(
 
 static struct ptrmap_entry *__ph_ptrmap_update_entry_from_ertag(void *tag, struct ptrmap_entry *prev) {
     if (!__ph_ptrmap) return NULL;
-    struct ptrmap_entry evalue = {.base = prev->base, .len = prev->len, .tag = tag};
-    struct ptrmap_entry *ret = __ph_ptrmap_update_entry_inner(__ph_ptrmap, evalue, 0);
+    struct ptrmap_entry evalue = {.tag = tag, .base = prev->base, .len = prev->len};
+    struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
     return __ph_ptrmap_entry_insert_to_list(ret, prev);
 }
 
 static struct ptrmap_entry *__ph_ptrmap_update_entry_from_obj(void *tag, struct objmap_entry *obj) {
     if (!__ph_ptrmap) return NULL;
-    struct ptrmap_entry evalue = {.base = obj->base, .len = obj->len, .tag = tag};
-    struct ptrmap_entry *ret = __ph_ptrmap_update_entry_inner(__ph_ptrmap, evalue, 0);
+    struct ptrmap_entry evalue = {.tag = tag, .base = obj->base, .len = obj->len};
+    struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
     return __ph_ptrmap_entry_insert_to_list(ret, (struct ptrmap_entry *)obj);
 }
 
 static struct ptrmap_entry *__ph_ptrmap_update_entry_loose(void *tag) {
     if (!__ph_ptrmap) return NULL;
-    struct ptrmap_entry evalue = {.base = NULL, .len = SIZE_MAX, .tag = tag};
-    struct ptrmap_entry *ret = __ph_ptrmap_update_entry_inner(__ph_ptrmap, evalue, 0);
+    struct ptrmap_entry evalue = {.tag = tag, .base = NULL, .len = SIZE_MAX};
+    struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
     return ret;
 }
 
@@ -555,24 +544,106 @@ static void *__ph_objmap_create(unsigned n_entries) {
     return ret;
 }
 
+static struct objmap_entry *__ph_objmap_create_entry(
+    struct objmap_entry *objmap, struct objmap_entry evalue, unsigned lv) {
+    assert(!__PH_MAPENT_IS_NULL(&evalue));
+
+    if (lv == UINT_MAX)
+        return NULL;
+
+    objmap_index_t idx = __ph_hash_addr(evalue.tag, lv);
+    assert(0 <= idx && idx < __PH_OBJMAP_NR_ENTRIES);
+    struct objmap_entry *entry = &objmap[idx];
+
+    if (__PH_MAPENT_IS_NULL(entry) ||
+        entry->base = evalue.base;
+        entry->len = evalue.len;
+        entry->tag = evalue.tag;
+        __ph_objmap_print_entry(lv, entry);
+        return entry;
+    } else if (__PH_MAPENT_IS_MAP(entry)) {
+        return __ph_objmap_create_entry(__PH_MAPENT_GET_MAP(entry), evalue,
+                                                lv + 1);
+    } else /* range entry */ {
+        assert(__PH_MAPENT_IS_RANGE(entry));
+        assert(entry->tag != evalue.tag);
+
+        struct objmap_entry prev_evalue = *entry;
+        void *new_objmap = __ph_create_objmap(__PH_OBJMAP_NR_ENTRIES);
+        if (!new_objmap)
+            return NULL;
+
+        __PH_MAPENT_SET_MAP(entry, new_objmap);
+
+        struct objmap_entry *entry1 = __ph_objmap_create_entry(
+            new_objmap, prev_evalue, lv + 1);
+        if (!entry1)
+            return NULL;
+
+        struct objmap_entry *entry2 =
+            __ph_objmap_create_entry(new_objmap, evalue, lv + 1);
+        if (!entry2)
+            return NULL;
+
+        __ph_objmap_print_entry(lv, entry);
+
+        return entry2;
+    }
+}
+
+static bool __ph_objmap_create_entries(void *base, size_t size) {
+    if (!__ph_objmap) 
+        __ph_objmap = __ph_create_objmap(__PH_OBJMAP_NR_ENTRIES);
+
+    for (int goff = 0; goff <= size / __PH_GRANULE_SIZE; goff++) {
+        void *_tag = base + (goff * __PH_GRANULE_SIZE);
+        struct objmap_entry evalue = { .tag = tag, .base = base, .len = len };
+        void *create_res = __ph_objmap_create_entry(__ph_objmap, evalue, 0);
+        if (!create_res) return false;
+    }
+    
+    return true;
+}
+
 static struct objmap_entry *__ph_objmap_get_entry_inner(struct objmap_entry *objmap, void *aobj, unsigned lv) {
     if (!objmap) return NULL;
-    assert((uintptr_t)aobj % __PH_GRANULE_SIZE == 0);
     struct objmap_entry *entry = &objmap[__ph_hash_addr(aobj, lv)];
 
     if (__PH_MAPENT_IS_MAP(entry)) {
         return __ph_objmap_get_entry_inner(__PH_MAPENT_GET_MAP(entry), aobj, lv + 1);
-    } else if (IS_objmap_ENTRY_OBJ(entry)) {
-        if (entry->obj == obj) return entry;
-        else return NULL;
+    } else if (entry->tag == aobj) {
+        return entry;
     } else {
         return NULL;
     }
 }
 
+// Return: the corresponding object to 'obj'.
+// Note: 'obj' doesn't need to be granule-aligned!
 static struct objmap_entry *__ph_objmap_get_entry(void *obj) {
     if (!__ph_objmap) return NULL;
-    return __ph_objmap_get_entry_inner(__ph_objmap, obj, 0);
+    void *aobj = (void *)__PH_GRANULE_FLOOR(obj);
+    return __ph_objmap_get_entry_inner(__ph_objmap, aobj, 0);
+}
+
+static bool __ph_objmap_destroy_entries(void *tag) {
+    // Get the range of the current 'tag'.
+    struct objmap_entry *entry = __ph_objmap_get_entry(tag);
+    if (!entry) return true;    // Maybe untracked object. Ignore.
+
+    for (int goff = 0; goff < entry->len / __PH_GRANULE_SIZE; goff++) {
+        void *aobj = entry->base + (goff * __PH_GRANULE_SIZE);
+        struct objmapoent *oent = __ph_objmap_getoent(aobj);
+        if (!oent) continue;
+
+        // Invalidate all pointer entries associated with this object.
+        struct ptrmap_entry *pent = oent->next;
+        for (; pent != NULL; pent = pent->next) 
+            pent->len = 0;
+
+        // Destroy all object map entries associated with 'tag'.
+        __PH_MAPENT_SET_NULL(oent);
+    }
 }
 
 /** Interface **/
