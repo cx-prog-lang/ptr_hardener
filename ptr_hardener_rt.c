@@ -37,6 +37,7 @@
 //  - tag == NULL:  null entry (=no object)
 //  - tag == 1:     map entry ('next' = nested map)
 //  - otherwise:    range entry (=object's range)
+//                  (tag == -1: anonymous)
 #define COMMON_MAP_ENTRY                                                       \
     struct {                                                                   \
         void *tag;  /* Hash tag: the address of this granule. */ \
@@ -521,7 +522,14 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry(
     }
 }
 
-static struct ptrmap_entry *__ph_ptrmap_update_entry_from_ertag(void *tag, struct ptrmap_entry *prev) {
+static struct ptrmap_entry *__ph_ptrmap_update_entry_from_null(void *tag) {
+    if (!__ph_ptrmap) return NULL;
+    struct ptrmap_entry evalue = {.tag = tag, .base = NULL, .len = 0};
+    struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
+    return __ph_ptrmap_entry_insert_to_list(ret, prev);
+}
+
+static struct ptrmap_entry *__ph_ptrmap_update_entry_from_ptr(void *tag, struct ptrmap_entry *prev) {
     if (!__ph_ptrmap) return NULL;
     struct ptrmap_entry evalue = {.tag = tag, .base = prev->base, .len = prev->len};
     struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
@@ -862,24 +870,33 @@ void free_aligned_sized(void *ptr) {
     __ph_map_print();
 }
 
-static void __ph_ptr_update(void *eetag, void *eeaddr, void *ertag) {
-    __ph_printf("__ph_ptr_update(%p, %p, %p)\n", eetag, eeaddr, ertag);
-    assert(*(void **)eetag == eeaddr);
+static struct ptrmap_entry __ph_anon_ptrmap_entry(void *base, size_t len) {
+    return (struct ptrmap_entry){ .tag = (void *)~(uintptr_t)0, .base = base, .len = len };
+}
+
+static void __ph_ptr_update(void *eetag, void *eraddr, struct ptrmap_entry origent) {
+    __ph_printf("__ph_ptr_update(%p, %p, {tag: %p, base: %p, len: %d})\n", eetag, eraddr, origent.tag, origent.base, origent,len);
 
     if (!__ph_ptrmap) 
         __ph_ptrmap = __ph_ptrmap_create(__PH_PTRMAP_NR_ENTRIES);
 
-    // Case 1: from tracked pointer.
-    // Copy range information from the assigner pointer.
-    struct ptrmap_entry *erent = (ertag) ? __ph_ptrent_get_entry(ertag) : NULL;
-    if (erent) {
-        __ph_ptrmap_update_entry_from_ertag(eetag, erent);
+    // Case 0: from a null pointer (!eraddr)
+    // Nullify the entry.
+    if (eraddr == NULL) {
+        __ph_ptrmap_update_entry_from_null(eetag);
         return;
     }
 
-    // Case 2: from tracked object.
+    // Case 1: from a pointer map entry (tracked ptr or constant ptr). (eraddr && origent)
+    // Copy range information from the assigner pointer.
+    if (__PH_MAPENT_IS_RANGE(origent)) {
+        __ph_ptrmap_update_entry_from_ptr(eetag, &origent);
+        return;
+    }
+
+    // Case 2: from an objct map object. (eraddr && !origent)
     // Copy range information from the object.
-    struct objmap_entry *oent = (eeaddr) ? __ph_objent_get_entry(eeaddr) : NULL;
+    struct objmap_entry *oent = (eraddr) ? __ph_objent_get_entry(eraddr) : NULL;
     if (oent) {
         __ph_ptrmap_update_entry_from_obj(eetag, oent);
         return;
@@ -887,14 +904,14 @@ static void __ph_ptr_update(void *eetag, void *eeaddr, void *ertag) {
 
     // Case 3: from stack object.
     // Copy range information from the stack bulk (create one if none).
-    if (__PH_IS_STACKADDR(eeaddr)) {
+    if (__PH_IS_STACKADDR(eraddr)) {
         __ph_ptrmap_update_entry_from_obj(eetag, &__ph_stack_obj);
         return;
     }
 
     // Case 4: from untracked pointer & object.
-    // Make an untracked object at 'eeaddr'.
-    oent = __ph_objmap_create_entries(eeaddr, __PH_UNTRACKED_OBJ_TOLERANCE);
+    // Make an untracked object at 'eraddr'.
+    oent = __ph_objmap_create_entries(eraddr, __PH_UNTRACKED_OBJ_TOLERANCE);
     if (oent) { 
         __ph_ptrmap_update_entry_from_obj(eetag, oent);
         return;
