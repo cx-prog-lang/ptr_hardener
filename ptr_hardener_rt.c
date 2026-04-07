@@ -57,6 +57,8 @@
 #define __PH_MAPENT_IS_RANGE(entry)                                            \
     (!__PH_MAPENT_IS_NULL(entry) && !__PH_MAPENT_IS_MAP(entry))
 
+#define __PH_MAPENT_TAG_ANON ((void *)~(uintptr_t)0)
+
 // Object map entry
 struct objmap_entry {
     COMMON_MAP_ENTRY;
@@ -67,6 +69,8 @@ struct ptrmap_entry {
     COMMON_MAP_ENTRY;
     void *prev; /* Assoc. ptrs: previous entry. */
 };
+
+#define __PH_PTRMAP_ENTRY_NULL ((struct ptrmap_entry){ .tag = NULL; })
 
 typedef uint64_t map_index_t;
 
@@ -108,13 +112,6 @@ void (*asfree_impl)(void *) __attribute__((weak)); // 'free_aligned_sized'
 
 #define __PH_IS_STACKADDR(addr) \
     (((intptr_t)(addr) & __PH_STACK_MASK) == __PH_STACK_MASK)
-
-const static struct objmap_entry __ph_stack_obj = {
-    .tag = __PH_STACK_BASE,
-    .base = __PH_STACK_BASE,
-    .len = __PH_STACK_LEN,
-    .next = NULL
-};
 
 /** Debug utilities **/
 
@@ -522,13 +519,6 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry(
     }
 }
 
-static struct ptrmap_entry *__ph_ptrmap_update_entry_from_null(void *tag) {
-    if (!__ph_ptrmap) return NULL;
-    struct ptrmap_entry evalue = {.tag = tag, .base = NULL, .len = 0};
-    struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
-    return __ph_ptrmap_entry_insert_to_list(ret, prev);
-}
-
 static struct ptrmap_entry *__ph_ptrmap_update_entry_from_ptr(void *tag, struct ptrmap_entry *prev) {
     if (!__ph_ptrmap) return NULL;
     struct ptrmap_entry evalue = {.tag = tag, .base = prev->base, .len = prev->len};
@@ -870,16 +860,85 @@ void free_aligned_sized(void *ptr) {
     __ph_map_print();
 }
 
-static struct ptrmap_entry __ph_null_ptrmap_entry() {
-    return (struct ptrmap_entry){ .tag = 0 };
+// Warning: the **address** of the returned struct should be used.
+static struct ptrmap_entry __ph_ptrmap_entry_from_base(void *base) {
+    return (struct ptrmap_entry){ .tag = __PH_MAPENT_TAG_ANON, .base = base, .len = __PH_UNTRACKED_OBJ_TOLERANCE };
 }
 
-static struct ptrmap_entry __ph_anon_ptrmap_entry(void *base, size_t len) {
-    return (struct ptrmap_entry){ .tag = (void *)~(uintptr_t)0, .base = base, .len = len };
+static struct ptrmap_entry *__ph_ptrmap_entry_from_ptr(void *tag) {
+    struct ptrmap_entry *pent = __ph_ptrent_get_entry(tag);
+    if (pent) return pent;
+
+    // If there is none, make an untracked pointer for 'tag'.
+    void *base = *(void **)tag;
+    struct ptrmap_entry ret = { .tag = tag, .base = base, len = __PH_UNTRACKED_OBJ_TOLERANCE };
+    return __ph_ptrmap_update_entry_from_ptr(tag, &ret);
 }
 
-static void __ph_ptr_update(void *eetag, void *eraddr, struct ptrmap_entry origent) {
-    __ph_printf("__ph_ptr_update(%p, %p, {tag: %p, base: %p, len: %d})\n", eetag, eraddr, origent.tag, origent.base, origent,len);
+// Warning: the **address** of the returned struct should be used.
+static struct ptrmap_entry __ph_ptrmap_entry_from_obj(void *obj) {
+    struct ptrmap_entry ret = { .tag = __PH_MAPENT_TAG_ANON };
+
+    struct objmap_entry *oent = __ph_objent_get_entry(obj);
+    if (oent) {
+        // Case 1: from an objct map entry.
+        // Copy range information from the object.
+        ret.base = oent->base;
+        ret.len = oent->len;
+    } else if (__PH_IS_STACKADDR(obj)) {
+        // Case 2: is a stack object.
+        // Copy range information from the stack bulk.
+        ret.base = __PH_STACK_BASE;
+        ret.len = __PH_STACK_LEN;
+    } else {
+        // Case 3: from an untracked object.
+        // Make an untracked object at 'obj'.
+        oent = __ph_objmap_create_entries(obj, __PH_UNTRACKED_OBJ_TOLERANCE);
+        if (!oent) return __PH_PTRMAP_ENTRY_NULL;
+        ret.base = oent->base;
+        ret.len = oent->len;
+    }
+
+    return ret;
+}
+
+struct ptrmap_stack_frame {
+    struct ptrmap_entry **args;
+    size_t len;
+    struct ptrmap_entry *ret;
+};
+
+#define __PH_PTRMAP_STACK_DEPTH (512)
+
+struct ptrmap_stack_frame __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
+unsigned __ph_ptrmap_stack_idx __attribute__((weak));
+
+static void __ph_push_args_ptrmap_entry(struct ptrmap_entry **args, size_t len, ...) {
+    __ph_ptrmap_stack_idx++;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args = args;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len = len;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret = NULL;
+
+    va_list arg;
+    va_start(arg, len);
+    for (int i = 0; i < len; i++) 
+        args[i] = va_arg(arg, struct ptrmap_entry *);
+    va_end(arg);
+}
+
+static struct ptrmap_entry *__ph_get_arg_ptrmap_entry(size_t pos) {
+    assert(pos < __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len);
+    return __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args[pos];
+}
+
+static struct ptrmap_entry *__ph_pop_ret_ptrmap_entry() {
+    struct ptrmap_entry *ret = __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret;
+    __ph_ptrmap_stack_idx--;
+    return ret;
+}
+
+static void __ph_ptr_update(void *eetag, struct ptrmap_entry erent) {
+    __ph_printf("__ph_ptr_update(%p, {tag: %p, base: %p, len: %d})\n", eetag, erent.tag, erent.base, erent,len);
 
     if (!__ph_ptrmap) 
         __ph_ptrmap = __ph_ptrmap_create(__PH_PTRMAP_NR_ENTRIES);
@@ -887,18 +946,18 @@ static void __ph_ptr_update(void *eetag, void *eraddr, struct ptrmap_entry orige
     // Case 0: from a null pointer (!eraddr)
     // Nullify the entry.
     if (eraddr == NULL) {
-        __ph_ptrmap_update_entry_from_null(eetag);
+        __ph_ptrmap_update_entry_from_ptr(eetag, &__PH_PTRMAP_ENTRY_NULL);
         return;
     }
 
-    // Case 1: from a pointer map entry (tracked ptr or constant ptr). (eraddr && origent)
+    // Case 1: from a pointer map entry (tracked ptr or constant ptr). (eraddr && erent)
     // Copy range information from the assigner pointer.
-    if (__PH_MAPENT_IS_RANGE(origent)) {
-        __ph_ptrmap_update_entry_from_ptr(eetag, &origent);
+    if (__PH_MAPENT_IS_RANGE(erent)) {
+        __ph_ptrmap_update_entry_from_ptr(eetag, &erent);
         return;
     }
 
-    // Case 2: from an objct map object. (eraddr && !origent)
+    // Case 2: from an objct map object. (eraddr && !erent)
     // Copy range information from the object.
     struct objmap_entry *oent = (eraddr) ? __ph_objent_get_entry(eraddr) : NULL;
     if (oent) {
