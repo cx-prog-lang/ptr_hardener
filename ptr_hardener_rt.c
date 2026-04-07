@@ -870,6 +870,10 @@ void free_aligned_sized(void *ptr) {
     __ph_map_print();
 }
 
+static struct ptrmap_entry __ph_null_ptrmap_entry() {
+    return (struct ptrmap_entry){ .tag = 0 };
+}
+
 static struct ptrmap_entry __ph_anon_ptrmap_entry(void *base, size_t len) {
     return (struct ptrmap_entry){ .tag = (void *)~(uintptr_t)0, .base = base, .len = len };
 }
