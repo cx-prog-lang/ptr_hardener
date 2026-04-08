@@ -910,8 +910,8 @@ struct ptrmap_stack_frame {
 
 #define __PH_PTRMAP_STACK_DEPTH (512)
 
-struct ptrmap_stack_frame __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
-unsigned __ph_ptrmap_stack_idx __attribute__((weak));
+thread_local struct ptrmap_stack_frame __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
+thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
 
 static void __ph_push_args_ptrmap_entry(struct ptrmap_entry **args, size_t len, ...) {
     __ph_ptrmap_stack_idx++;
@@ -998,3 +998,5 @@ static void __ph_ptr_deref(void *tag, void *addr, size_t size) {
     if (!(entry->base <= addr && addr + size <= entry->base + entry->len))
         raise(SIGUSR1);
 }
+
+// TODO: make ptrmap and objmap entry arrays to enable rcu.
