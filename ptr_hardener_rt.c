@@ -52,7 +52,7 @@
 #define __PH_MAPENT_SET_MAP(entry, map) ((entry)->tag = (void *)1)
 #define __PH_MAPENT_IS_MAP(entry) ((entry)->tag == (void *)1)
 #define __PH_MAPENT_GET_MAP(entry)                                             \
-    (assert(__PH_MAPENT_IS_MAP(entry), (entry)->next)
+    (assert(__PH_MAPENT_IS_MAP(entry)), (entry)->next)
 
 #define __PH_MAPENT_IS_RANGE(entry)                                            \
     (!__PH_MAPENT_IS_NULL(entry) && !__PH_MAPENT_IS_MAP(entry))
@@ -70,9 +70,10 @@ struct ptrmap_entry {
     void *prev; /* Assoc. ptrs: previous entry. */
 };
 
-#define __PH_PTRMAP_ENTRY_NULL ((struct ptrmap_entry){ .tag = NULL; })
+#define __PH_PTRMAP_ENTRY_NULL ((struct ptrmap_entry){ .tag = NULL })
 
-typedef uint64_t map_index_t;
+typedef uint64_t ptrmap_index_t;
+typedef uint64_t objmap_index_t;
 
 // NOTE: reduced for debugging. Original "1 << 16".
 #define __PH_OBJMAP_NR_ENTRIES (1 << 3)
@@ -112,6 +113,26 @@ void (*asfree_impl)(void *) __attribute__((weak)); // 'free_aligned_sized'
 
 #define __PH_IS_STACKADDR(addr) \
     (((intptr_t)(addr) & __PH_STACK_MASK) == __PH_STACK_MASK)
+
+// Global pointer map: the entry point of the pointer/object map. On a hash
+// collision, the collided entries are moved to a nested map. Thanks to
+// __attribute__((weak)), all global variables in different translation units
+// would share the same storage space.
+void *__ph_ptrmap __attribute__((weak));
+
+// Global object map: roughly the same as the global pointer map.
+void *__ph_objmap __attribute__((weak));
+
+struct ptrmap_stack_frame {
+    struct ptrmap_entry **args;
+    size_t len;
+    struct ptrmap_entry *ret;
+};
+
+#define __PH_PTRMAP_STACK_DEPTH (512)
+
+thread_local struct ptrmap_stack_frame __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
+thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
 
 /** Debug utilities **/
 
@@ -419,11 +440,19 @@ static void __ph_map_print() {
 
 /** General utilities **/
 
-static map_index_t __ph_hash_addr(void *addr, unsigned seed) {
-    // FIXME: optimize this with a number sequence visible to this TU.
+static ptrmap_index_t __ph_ptrmap_index(void *addr, unsigned seed) {
+    // FIXME: optimize hashing with a number sequence visible to this TU.
     srand(((uintptr_t)addr + seed) % (uintptr_t)UINT_MAX);
-    map_index_t hash = rand();
-    hash %= RNGMAP_NR_ENTRIES;
+    ptrmap_index_t hash = rand();
+    hash %= __PH_PTRMAP_NR_ENTRIES;
+    return hash;
+}
+
+static objmap_index_t __ph_objmap_index(void *addr, unsigned seed) {
+    // FIXME: optimize hashing with a number sequence visible to this TU.
+    srand(((uintptr_t)addr + seed) % (uintptr_t)UINT_MAX);
+    objmap_index_t hash = rand();
+    hash %= __PH_OBJMAP_NR_ENTRIES;
     return hash;
 }
 
@@ -433,12 +462,6 @@ static size_t __ph_extend_granule_alignable(size_t size) {
 }
 
 /** Pointer map **/
-
-// Global pointer map: the entry point of the pointer/object map. On a hash
-// collision, the collided entries are moved to a nested map. Thanks to
-// __attribute__((weak)), all global variables in different translation units
-// would share the same storage space.
-void *__ph_ptrmap __attribute__((weak));
 
 static void *__ph_ptrmap_create(unsigned n_entries) {
     assert(malloc_impl);
@@ -462,8 +485,8 @@ static struct ptrmap_entry *__ph_ptrmap_entry_insert_to_list(struct ptrmap_entry
 
 static struct ptrmap_entry *__ph_ptrmap_entry_remove_from_list(struct ptrmap_entry *this) {
     if (!this) return NULL;
-    this->prev->next = this->next;
-    this->next->prev = this->prev;
+    ((struct ptrmap_entry *)this->prev)->next = this->next;
+    ((struct ptrmap_entry *)this->next)->prev = this->prev;
     this->prev = this->next = NULL;
     return this;
 }
@@ -475,7 +498,7 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry(
     if (lv == UINT_MAX)
         return NULL;
 
-    ptrmap_index_t idx = __ph_hash_addr(evalue.tag, lv);
+    ptrmap_index_t idx = __ph_ptrmap_index(evalue.tag, lv);
     assert(0 <= idx && idx < __PH_PTRMAP_NR_ENTRIES);
     struct ptrmap_entry *entry = &ptrmap[idx];
 
@@ -487,7 +510,7 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry(
         }
         entry->base = evalue.base;
         entry->len = evalue.len;
-        __ph_ptrmap_print_entry(lv, entry);
+        __ph_ptrmap_entry_print(lv, entry);
         return entry;
     } else if (__PH_MAPENT_IS_MAP(entry)) {
         return __ph_ptrmap_update_entry(__PH_MAPENT_GET_MAP(entry), evalue,
@@ -497,7 +520,7 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry(
         assert(entry->tag != evalue.tag);
 
         struct ptrmap_entry prev_evalue = *entry;
-        void *new_ptrmap = __ph_create_ptrmap(__PH_ptrmap_NR_ENTRIES);
+        void *new_ptrmap = __ph_ptrmap_create(__PH_PTRMAP_NR_ENTRIES);
         if (!new_ptrmap)
             return NULL;
 
@@ -513,29 +536,22 @@ static struct ptrmap_entry *__ph_ptrmap_update_entry(
         if (!entry2)
             return NULL;
 
-        __ph_ptrmap_print_entry(lv, entry);
+        __ph_ptrmap_entry_print(lv, entry);
 
         return entry2;
     }
 }
 
-static struct ptrmap_entry *__ph_ptrmap_update_entry_from_ptr(void *tag, struct ptrmap_entry *prev) {
+static struct ptrmap_entry *__ph_ptrmap_update_entry_by_tag(void *tag, struct ptrmap_entry *prev) {
     if (!__ph_ptrmap) return NULL;
     struct ptrmap_entry evalue = {.tag = tag, .base = prev->base, .len = prev->len};
     struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
     return __ph_ptrmap_entry_insert_to_list(ret, prev);
 }
 
-static struct ptrmap_entry *__ph_ptrmap_update_entry_from_obj(void *tag, struct objmap_entry *obj) {
-    if (!__ph_ptrmap) return NULL;
-    struct ptrmap_entry evalue = {.tag = tag, .base = obj->base, .len = obj->len};
-    struct ptrmap_entry *ret = __ph_ptrmap_update_entry(__ph_ptrmap, evalue, 0);
-    return __ph_ptrmap_entry_insert_to_list(ret, (struct ptrmap_entry *)obj);
-}
-
 static struct ptrmap_entry *__ph_ptrmap_get_entry_inner(struct ptrmap_entry *ptrmap, void *tag, unsigned lv) {
     if (!ptrmap) return NULL;
-    struct ptrmap_entry *entry = &ptrmap[__ph_hash_addr(tag, lv)];
+    struct ptrmap_entry *entry = &ptrmap[__ph_ptrmap_index(tag, lv)];
 
     if (__PH_MAPENT_IS_MAP(entry)) {
         return __ph_ptrmap_get_entry_inner(__PH_MAPENT_GET_MAP(entry), tag, lv + 1);
@@ -548,13 +564,10 @@ static struct ptrmap_entry *__ph_ptrmap_get_entry_inner(struct ptrmap_entry *ptr
 
 static struct ptrmap_entry *__ph_ptrmap_get_entry(void *tag) {
     if (!__ph_ptrmap) return NULL;
-    return __ph_get_ptrmap_ptr_entry_inner(__ph_ptrmap, tag, 0);
+    return __ph_ptrmap_get_entry_inner(__ph_ptrmap, tag, 0);
 }
 
 /** Object map **/
-
-// Global object map: roughly the same as the global pointer map.
-void *__ph_objmap __attribute__((weak));
 
 static void *__ph_objmap_create(unsigned n_entries) {
     assert(malloc_impl);
@@ -573,15 +586,15 @@ static struct objmap_entry *__ph_objmap_create_entry(
     if (lv == UINT_MAX)
         return NULL;
 
-    objmap_index_t idx = __ph_hash_addr(evalue.tag, lv);
+    objmap_index_t idx = __ph_objmap_index(evalue.tag, lv);
     assert(0 <= idx && idx < __PH_OBJMAP_NR_ENTRIES);
     struct objmap_entry *entry = &objmap[idx];
 
-    if (__PH_MAPENT_IS_NULL(entry) ||
+    if (__PH_MAPENT_IS_NULL(entry)) {
         entry->base = evalue.base;
         entry->len = evalue.len;
         entry->tag = evalue.tag;
-        __ph_objmap_print_entry(lv, entry);
+        __ph_objmap_entry_print(lv, entry);
         return entry;
     } else if (__PH_MAPENT_IS_MAP(entry)) {
         return __ph_objmap_create_entry(__PH_MAPENT_GET_MAP(entry), evalue,
@@ -591,7 +604,7 @@ static struct objmap_entry *__ph_objmap_create_entry(
         assert(entry->tag != evalue.tag);
 
         struct objmap_entry prev_evalue = *entry;
-        void *new_objmap = __ph_create_objmap(__PH_OBJMAP_NR_ENTRIES);
+        void *new_objmap = __ph_objmap_create(__PH_OBJMAP_NR_ENTRIES);
         if (!new_objmap)
             return NULL;
 
@@ -607,17 +620,19 @@ static struct objmap_entry *__ph_objmap_create_entry(
         if (!entry2)
             return NULL;
 
-        __ph_objmap_print_entry(lv, entry);
+        __ph_objmap_entry_print(lv, entry);
 
         return entry2;
     }
 }
 
-static bool __ph_objmap_create_entries(void *base, size_t size) {
+// Return: the first map entry.
+static struct objmap_entry *__ph_objmap_create_entries(void *base, size_t len) {
     if (!__ph_objmap) 
-        __ph_objmap = __ph_create_objmap(__PH_OBJMAP_NR_ENTRIES);
+        __ph_objmap = __ph_objmap_create(__PH_OBJMAP_NR_ENTRIES);
 
     void *abase = (void *)__PH_GRANULE_CEIL(base);
+    struct objmap_entry *ret = NULL;
 
     if (abase > base) {
         // Create entries per byte for the under-occupied granule below.
@@ -625,34 +640,37 @@ static bool __ph_objmap_create_entries(void *base, size_t size) {
             void *_tag = base + off;
             struct objmap_entry evalue = { .tag = _tag, .base = base, .len = len };
             void *create_res = __ph_objmap_create_entry(__ph_objmap, evalue, 0);
-            if (!create_res) return false;
+            if (!create_res) return NULL;
+            if (!ret) ret = create_res;
         }
     }
 
-    int goff = 0
-    for (; goff <= size / __PH_GRANULE_SIZE; goff++) {
+    int goff = 0;
+    for (; goff <= len / __PH_GRANULE_SIZE; goff++) {
         void *_tag = abase + (goff * __PH_GRANULE_SIZE);
         struct objmap_entry evalue = { .tag = _tag, .base = base, .len = len };
         void *create_res = __ph_objmap_create_entry(__ph_objmap, evalue, 0);
-        if (!create_res) return false;
+        if (!create_res) return NULL;
+        if (!ret) ret = create_res;
     }
 
-    if (abase + (goff * __PH_GRANULE_SIZE) < base + size) {
+    if (abase + (goff * __PH_GRANULE_SIZE) < base + len) {
         // Create entries per byte for the under-occupied granule above.
         for (void *_tag = abase + (goff * __PH_GRANULE_SIZE); 
-             _tag < base + size; _tag++) {
+             _tag < base + len; _tag++) {
             struct objmap_entry evalue = { .tag = _tag, .base = base, .len = len };
             void *create_res = __ph_objmap_create_entry(__ph_objmap, evalue, 0);
-            if (!create_res) return false;
+            if (!create_res) return NULL;
+            if (!ret) ret = create_res;
         }
     }
     
-    return true;
+    return ret;
 }
 
 static struct objmap_entry *__ph_objmap_get_entry_inner(struct objmap_entry *objmap, void *obj, unsigned lv) {
     if (!objmap) return NULL;
-    struct objmap_entry *entry = &objmap[__ph_hash_addr(obj, lv)];
+    struct objmap_entry *entry = &objmap[__ph_objmap_index(obj, lv)];
 
     if (__PH_MAPENT_IS_MAP(entry)) {
         return __ph_objmap_get_entry_inner(__PH_MAPENT_GET_MAP(entry), obj, lv + 1);
@@ -688,7 +706,7 @@ static bool __ph_objmap_destroy_entries(void *tag) {
 
     for (int goff = 0; goff < entry->len / __PH_GRANULE_SIZE; goff++) {
         void *aobj = entry->base + (goff * __PH_GRANULE_SIZE);
-        struct objmapoent *oent = __ph_objmap_getoent(aobj);
+        struct objmap_entry *oent = __ph_objmap_get_entry(aobj);
         if (!oent) continue;
 
         // Invalidate all pointer entries associated with this object.
@@ -699,6 +717,8 @@ static bool __ph_objmap_destroy_entries(void *tag) {
         // Destroy all object map entries associated with 'tag'.
         __PH_MAPENT_SET_NULL(oent);
     }
+
+    return true;
 }
 
 /** Internal **/
@@ -720,7 +740,7 @@ static void *__ph_objmap_create_entries_or_cleanup(void *aobj, size_t size) {
     return aobj;
 }
 
-static void __ph_free_inner(void *ptr, void (**)(void *) _impl, const char *impl_name) {
+static void __ph_free_inner(void *ptr, void (**_impl)(void *), const char *impl_name) {
     if (!*_impl) {
         *_impl = dlsym(RTLD_NEXT, "free");
         if (!*_impl) return;
@@ -842,22 +862,27 @@ void *realloc(void *ptr, size_t size) {
 __attribute__((weak))
 void free(void *ptr) {
     __ph_printf("free(%p)\n", ptr);
-    __ph_free(ptr, &free_impl, "free");
+    __ph_free_inner(ptr, &free_impl, "free");
     __ph_map_print();
 }
 
 __attribute__((weak))
 void free_sized(void *ptr) {
     __ph_printf("free_sized(%p)\n", ptr);
-    __ph_free(ptr, &sfree_impl, "free_sized");
+    __ph_free_inner(ptr, &sfree_impl, "free_sized");
     __ph_map_print();
 }
 
 __attribute__((weak))
 void free_aligned_sized(void *ptr) {
     __ph_printf("free_aligned_sized(%p)\n", ptr);
-    __ph_free(ptr, &asfree_impl, "free_aligned_sized");
+    __ph_free_inner(ptr, &asfree_impl, "free_aligned_sized");
     __ph_map_print();
+}
+
+// Warning: the **address** of the returned struct should be used.
+static struct ptrmap_entry __ph_ptrmap_entry_from_null() {
+    return (struct ptrmap_entry){ .tag = __PH_MAPENT_TAG_ANON, .base = NULL, .len = 0 };
 }
 
 // Warning: the **address** of the returned struct should be used.
@@ -866,20 +891,20 @@ static struct ptrmap_entry __ph_ptrmap_entry_from_base(void *base) {
 }
 
 static struct ptrmap_entry *__ph_ptrmap_entry_from_ptr(void *tag) {
-    struct ptrmap_entry *pent = __ph_ptrent_get_entry(tag);
+    struct ptrmap_entry *pent = __ph_ptrmap_get_entry(tag);
     if (pent) return pent;
 
     // If there is none, make an untracked pointer for 'tag'.
     void *base = *(void **)tag;
-    struct ptrmap_entry ret = { .tag = tag, .base = base, len = __PH_UNTRACKED_OBJ_TOLERANCE };
-    return __ph_ptrmap_update_entry_from_ptr(tag, &ret);
+    struct ptrmap_entry ret = { .tag = tag, .base = base, .len = __PH_UNTRACKED_OBJ_TOLERANCE };
+    return __ph_ptrmap_update_entry_by_tag(tag, &ret);
 }
 
 // Warning: the **address** of the returned struct should be used.
 static struct ptrmap_entry __ph_ptrmap_entry_from_obj(void *obj) {
     struct ptrmap_entry ret = { .tag = __PH_MAPENT_TAG_ANON };
 
-    struct objmap_entry *oent = __ph_objent_get_entry(obj);
+    struct objmap_entry *oent = __ph_objmap_get_entry(obj);
     if (oent) {
         // Case 1: from an objct map entry.
         // Copy range information from the object.
@@ -901,17 +926,6 @@ static struct ptrmap_entry __ph_ptrmap_entry_from_obj(void *obj) {
 
     return ret;
 }
-
-struct ptrmap_stack_frame {
-    struct ptrmap_entry **args;
-    size_t len;
-    struct ptrmap_entry *ret;
-};
-
-#define __PH_PTRMAP_STACK_DEPTH (512)
-
-thread_local struct ptrmap_stack_frame __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
-thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
 
 static void __ph_push_args_ptrmap_entry(struct ptrmap_entry **args, size_t len, ...) {
     __ph_ptrmap_stack_idx++;
@@ -938,49 +952,13 @@ static struct ptrmap_entry *__ph_pop_ret_ptrmap_entry() {
 }
 
 static void __ph_ptr_update(void *eetag, struct ptrmap_entry erent) {
-    __ph_printf("__ph_ptr_update(%p, {tag: %p, base: %p, len: %d})\n", eetag, erent.tag, erent.base, erent,len);
+    __ph_printf("__ph_ptr_update(%p, {tag: %p, base: %p, len: %d})\n", eetag, erent.tag, erent.base, erent.len);
 
     if (!__ph_ptrmap) 
         __ph_ptrmap = __ph_ptrmap_create(__PH_PTRMAP_NR_ENTRIES);
 
-    // Case 0: from a null pointer (!eraddr)
-    // Nullify the entry.
-    if (eraddr == NULL) {
-        __ph_ptrmap_update_entry_from_ptr(eetag, &__PH_PTRMAP_ENTRY_NULL);
-        return;
-    }
-
-    // Case 1: from a pointer map entry (tracked ptr or constant ptr). (eraddr && erent)
-    // Copy range information from the assigner pointer.
-    if (__PH_MAPENT_IS_RANGE(erent)) {
-        __ph_ptrmap_update_entry_from_ptr(eetag, &erent);
-        return;
-    }
-
-    // Case 2: from an objct map object. (eraddr && !erent)
-    // Copy range information from the object.
-    struct objmap_entry *oent = (eraddr) ? __ph_objent_get_entry(eraddr) : NULL;
-    if (oent) {
-        __ph_ptrmap_update_entry_from_obj(eetag, oent);
-        return;
-    }
-
-    // Case 3: from stack object.
-    // Copy range information from the stack bulk (create one if none).
-    if (__PH_IS_STACKADDR(eraddr)) {
-        __ph_ptrmap_update_entry_from_obj(eetag, &__ph_stack_obj);
-        return;
-    }
-
-    // Case 4: from untracked pointer & object.
-    // Make an untracked object at 'eraddr'.
-    oent = __ph_objmap_create_entries(eraddr, __PH_UNTRACKED_OBJ_TOLERANCE);
-    if (oent) { 
-        __ph_ptrmap_update_entry_from_obj(eetag, oent);
-        return;
-    }
-
-    assert(false);
+    __ph_ptrmap_update_entry_by_tag(eetag, &erent);
+    return;
 }
 
 static void __ph_ptr_deref(void *tag, void *addr, size_t size) {
@@ -989,10 +967,9 @@ static void __ph_ptr_deref(void *tag, void *addr, size_t size) {
 
     struct ptrmap_entry *entry = __ph_ptrmap_get_entry(tag);
     if (!entry) {
+        if (!__ph_ptrmap) return;
         // For now, untracked pointers receive an auto-generated untracked object (if possible).
-        struct objmap_entry *oent = __ph_objmap_create_entries(addr, __PH_UNTRACKED_OBJ_TOLERANCE);
-        assert(oent);
-        entry = __ph_ptrmap_update_entry_from_obj(tag, oent);
+        entry = __ph_ptrmap_update_entry(__ph_ptrmap, __ph_ptrmap_entry_from_obj(tag), 0);
     }
 
     if (!(entry->base <= addr && addr + size <= entry->base + entry->len))
