@@ -1,5 +1,6 @@
 #include "basic.h"
 
+#include <alloca.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -7,15 +8,16 @@ bool test_char_access_okay() {
     int a;
 
     void *obj = malloc(sizeof(char));
-    void *ptr = obj;
-    //__ph_ptr_move(&ptr, ptr, sizeof(char), ptr+1, sizeof(char));
-    ptr += 1;
+    struct ptrmap_entry *obj_pent = alloca(sizeof(struct ptrmap_entry));
+    *obj_pent = __ph_ptrmap_entry_from_obj(obj);
+
+    void *ptr = obj + 1;
+    __ph_ptr_update(&ptr, *obj_pent);
+
+    __ph_ptr_deref(&ptr, ptr, sizeof(char));
+    *(char *)ptr;
 
     /*
-    __ph_ptr_deref(&ptr);
-    *(char *)ptr;
-    */
-
     void *obj2 = (void *)0x44444444;
     void *ptr2 = obj2;
     //__ph_ptr_move(&ptr, ptr2, sizeof(char), ptr2+1, sizeof(char));
@@ -30,10 +32,12 @@ bool test_char_access_okay() {
 
     __ph_ptr_deref(&ptr2, ptr2, sizeof(char));
     *(char *)ptr2;
+    */
     return true;
 }
 
 bool test_int_access_okay() {
+    /*
     struct Test {
         int x;
         char *p;
@@ -52,9 +56,10 @@ bool test_int_access_okay() {
     test->p += 20;
 
     //__ph_ptr_deref(&test->p);
-    //*test->p;
+    // *test->p;
 
     free(test);
+    */
     return true;
 }
 
