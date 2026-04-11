@@ -86,8 +86,6 @@ typedef uint64_t objmap_index_t;
 
 #define __PH_GRANULE_CEIL(x)                                                   \
     (((intptr_t)(x) + __PH_GRANULE_SIZE - 1) & ~(intptr_t)__PH_GRANULE_MASK)
-#define __PH_GRANULE_FLOOR(x)                                                  \
-    ((intptr_t)(x) & ~(intptr_t)__PH_GRANULE_MASK)
 
 // Actual standard allocators. The default behavior is to initialize them when
 // they're used the first time, but they _may_ be updated by a global
@@ -95,13 +93,8 @@ typedef uint64_t objmap_index_t;
 // have the same type signature to the allocator that it wants to replace.
 // Let's say multiple custom allocators (for the same original allocator) causes
 // an undefined behavior, though I think it'll function just fine.
-void *(*malloc_impl)(size_t) __attribute__((weak));          // 'malloc'
-void *(*calloc_impl)(size_t, size_t) __attribute__((weak));  // 'calloc'
 void *(*aalloc_impl)(size_t, size_t) __attribute__((weak));  // 'aligned_alloc'
-void *(*realloc_impl)(void *, size_t) __attribute__((weak)); // 'realloc'
 void (*free_impl)(void *) __attribute__((weak));             // 'free'
-void (*sfree_impl)(void *) __attribute__((weak));            // 'free_sized'
-void (*asfree_impl)(void *) __attribute__((weak)); // 'free_aligned_sized'
 
 // Untracked object tolerance
 #define __PH_UNTRACKED_OBJ_TOLERANCE (1 << 6)
@@ -467,17 +460,28 @@ static objmap_index_t __ph_objmap_index(void *addr, unsigned seed) {
     return hash;
 }
 
-static size_t __ph_extend_granule_alignable(size_t size) {
-    return (__PH_GRANULE_SIZE - 1)     // Object alignment slack
-            + size;                    // Object itself
+static bool __ph_init_aalloc() {
+    if (!aalloc_impl) {
+        __ph_printf("info: initialize aalloc_impl.\n");
+        aalloc_impl = dlsym(RTLD_NEXT, "aligned_alloc");
+    }
+    return !!aalloc_impl;
+}
+
+static bool __ph_init_free() {
+    if (!free_impl) {
+        __ph_printf("info: initialize free_impl.\n");
+        free_impl = dlsym(RTLD_NEXT, "free");
+    }
+    return !!free_impl;
 }
 
 /** Pointer map **/
 
 static void *__ph_ptrmap_create(unsigned n_entries) {
-    assert(malloc_impl);
+    assert(aalloc_impl);
     unsigned size = n_entries * sizeof(struct ptrmap_entry);
-    void *ret = malloc_impl(size);
+    void *ret = aalloc_impl(1, size);
     if (!ret)
         return 0;
     memset(ret, 0, size);
@@ -588,9 +592,9 @@ static struct ptrmap_entry *__ph_ptrmap_get_entry(void *tag) {
 /** Object map **/
 
 static void *__ph_objmap_create(unsigned n_entries) {
-    assert(malloc_impl);
+    assert(aalloc_impl);
     unsigned size = n_entries * sizeof(struct objmap_entry);
-    void *ret = malloc_impl(size);
+    void *ret = aalloc_impl(1, size);
     if (!ret)
         return 0;
     memset(ret, 0, size);
@@ -704,17 +708,8 @@ static struct objmap_entry *__ph_objmap_get_entry(void *obj) {
 
     struct objmap_entry *ret = NULL;
 
-    // Common case: try with aligned 'obj'.
-    void *aobj = (void *)__PH_GRANULE_FLOOR(obj);
-    ret = __ph_objmap_get_entry_inner(__ph_objmap, aobj, 0);
-    if (ret) return ret;
-
-    // Exceptional case: try with raw 'obj'.
     ret = __ph_objmap_get_entry_inner(__ph_objmap, obj, 0);
-    if (ret) return ret;
-    
-    // Give up.
-    return NULL;
+    return ret;
 }
 
 static bool __ph_objmap_destroy_entries(void *tag) {
@@ -758,19 +753,55 @@ static void *__ph_objmap_create_entries_or_cleanup(void *aobj, size_t size) {
     return aobj;
 }
 
-static void __ph_free_inner(void *ptr, void (**_impl)(void *), const char *impl_name) {
-    if (!*_impl) {
-        *_impl = dlsym(RTLD_NEXT, impl_name);
-        if (!*_impl) return;
+static void *__ph_malloc(size_t size) {
+    if (!__ph_init_aalloc())
+        return NULL;
+
+    size_t aligned_size = __PH_GRANULE_CEIL(size);
+    if (aligned_size < size) return NULL;
+
+    __ph_printf("info: aalloc(%d)\n", aligned_size);
+    return aalloc_impl(__PH_GRANULE_SIZE, aligned_size);
+}
+
+static void *__ph_aalloc(size_t align, size_t size) {
+    if (!__ph_init_aalloc())
+        return NULL;
+
+    size_t align_min, align_max;
+    if (align < __PH_GRANULE_SIZE) {
+        align_min = align;
+        align_max = __PH_GRANULE_SIZE;
+    } else {
+        align_min = __PH_GRANULE_SIZE;
+        align_max = align;
     }
 
+    size_t align_lcm = align_min;
+    while (align_lcm % align_max)
+        align_lcm += align_min;
+
+    size_t aligned_size =
+        ((intptr_t)(size) + align_lcm - 1) & ~(intptr_t)align_lcm;
+    if (aligned_size < size) return NULL;
+
+    __ph_printf("info: aalloc(%d)\n", aligned_size);
+    return aalloc_impl(align_lcm, aligned_size);
+}
+
+static void __ph_free(void *ptr) {
+    if (!__ph_init_free())
+        return;
+
+    __ph_printf("info: before free.\n");
     __ph_objmap_print();
 
-    void *aptr = (void *)__PH_GRANULE_FLOOR(ptr);
-    bool destroy_res = __ph_objmap_destroy_entries(aptr);
+    __ph_printf("info: detroy objmap entries.\n");
+    bool destroy_res = __ph_objmap_destroy_entries(ptr);
     if (!destroy_res) return;
 
-    (*_impl)(ptr);
+    __ph_printf("info: free.\n");
+    free_impl(ptr);
 }
 
 /** Interface **/
@@ -779,21 +810,11 @@ __attribute__((weak))
 void *malloc(size_t size) {
     __ph_printf(">>> malloc(%d)\n", size);
 
-    if (!malloc_impl) {
-        malloc_impl = dlsym(RTLD_NEXT, "malloc");
-        if (!malloc_impl) return NULL;
-    }
+    void *obj = __ph_malloc(size);
+    if (size == 1024) return obj;      // FIXME: God awful stopgap (from libc) 
+    void *ret = __ph_objmap_create_entries_or_cleanup(obj, size);
 
-    size_t alignable_size = __ph_extend_granule_alignable(size);
-    if (alignable_size < size) return NULL;
-    void *obj = malloc_impl(alignable_size);
-    if (!obj) return NULL;
-
-    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
-    if (size == 1024) return aobj;      // FIXME: God awful stopgap (from libc) 
-
-    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, size);
-
+    __ph_printf("info: alloc done. (%p)\n", ret);
     __ph_map_print();
 
     return ret;
@@ -803,23 +824,14 @@ __attribute__((weak))
 void *calloc(size_t num, size_t esize) {
     __ph_printf(">>> calloc(%d, %d)\n", num, esize);
 
-    if (!calloc_impl) {
-        calloc_impl = dlsym(RTLD_NEXT, "calloc");
-        if (!calloc_impl) return NULL;
-    }
-
     size_t size = num * esize;
     if (size < esize) return NULL;
-    size_t alignable_size = __ph_extend_granule_alignable(size);
-    if (alignable_size < size) return NULL;
-    size_t aligned_num = (alignable_size + esize - 1) / esize;
-    void *obj = calloc_impl(aligned_num, esize);
-    if (!obj) return NULL;
 
-    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
-    size_t asize = __PH_GRANULE_CEIL(size);
-    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
+    void *obj = __ph_malloc(size);
+    memset(obj, 0, size);
+    void *ret = __ph_objmap_create_entries_or_cleanup(obj, size);
 
+    __ph_printf("info: alloc done. (%p)\n", ret);
     __ph_map_print();
 
     return ret;
@@ -829,21 +841,10 @@ __attribute__((weak))
 void *aligned_alloc(size_t align, size_t size) {
     __ph_printf(">>> aligned_alloc(%d, %d)\n", align, size);
 
-    if (!aalloc_impl) {
-        aalloc_impl = dlsym(RTLD_NEXT, "aligned_alloc");
-        if (!aalloc_impl) return NULL;
-    }
+    void *obj = __ph_aalloc(align, size);
+    void *ret = __ph_objmap_create_entries_or_cleanup(obj, size);
 
-    size_t alignable_size = __ph_extend_granule_alignable(size);
-    if (alignable_size < size) return NULL;
-    size_t aligned_alignable_size = (alignable_size + align - 1) & ~((size_t)(align - 1));
-    void *obj = aalloc_impl(align, aligned_alignable_size);
-    if (!obj) return NULL;
-
-    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
-    size_t asize = __PH_GRANULE_CEIL(size);
-    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
-
+    __ph_printf("info: alloc done. (%p)\n", ret);
     __ph_map_print();
 
     return ret;
@@ -853,27 +854,19 @@ __attribute__((weak))
 void *realloc(void *ptr, size_t size) {
     __ph_printf(">>> realloc(%p, %d)\n", ptr, size);
 
-    if (!realloc_impl) {
-        realloc_impl = dlsym(RTLD_NEXT, "realloc");
-        if (!realloc_impl) return NULL;
-    }
+    struct objmap_entry *oent = __ph_objmap_get_entry(ptr);
+    if (oent && size <= oent->len)
+        return ptr;
 
     bool destroy_res = __ph_objmap_destroy_entries(ptr);
     if (!destroy_res) return NULL;
 
-    size_t alignable_size = __ph_extend_granule_alignable(size);
-    if (alignable_size < size) return NULL;
-    void *obj = realloc(ptr, alignable_size);
-    if (!obj) return NULL;
+    void *obj = __ph_malloc(size);
+    memmove(obj, ptr, size);
+    __ph_free(ptr);
+    void *ret = __ph_objmap_create_entries_or_cleanup(obj, size);
 
-    void *aobj = (void *)__PH_GRANULE_CEIL(obj);
-    size_t asize = __PH_GRANULE_CEIL(size);
-
-    if (aobj != obj)
-        memmove(aobj, obj, size);
-
-    void *ret = __ph_objmap_create_entries_or_cleanup(aobj, asize);
-
+    __ph_printf("info: alloc done. (%p)\n", ret);
     __ph_map_print();
 
     return ret;
@@ -882,49 +875,30 @@ void *realloc(void *ptr, size_t size) {
 __attribute__((weak))
 void free(void *ptr) {
     __ph_printf(">>> free(%p)\n", ptr);
-    __ph_free_inner(ptr, &free_impl, "free");
+    __ph_free(ptr);
+
+    __ph_printf("info: free done.\n");
     __ph_map_print();
 }
 
 __attribute__((weak))
 void free_sized(void *ptr) {
     __ph_printf(">>> free_sized(%p)\n", ptr);
-    __ph_free_inner(ptr, &sfree_impl, "free_sized");
+    __ph_free(ptr);
+
+    __ph_printf("info: free done.\n");
     __ph_map_print();
 }
 
 __attribute__((weak))
 void free_aligned_sized(void *ptr) {
     __ph_printf(">>> free_aligned_sized(%p)\n", ptr);
-    __ph_free_inner(ptr, &asfree_impl, "free_aligned_sized");
+    __ph_free(ptr);
+
+    __ph_printf("info: free done.\n");
     __ph_map_print();
 }
 
-static void __ph_push_args_ptrmap_entry(struct ptrmap_entry **args, size_t len, ...) {
-    __ph_ptrmap_stack_idx++;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args = args;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len = len;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret = NULL;
-
-    va_list arg;
-    va_start(arg, len);
-    for (int i = 0; i < len; i++) 
-        args[i] = va_arg(arg, struct ptrmap_entry *);
-    va_end(arg);
-}
-
-static struct ptrmap_entry *__ph_get_arg_ptrmap_entry(size_t pos) {
-    assert(pos < __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len);
-    return __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args[pos];
-}
-
-static struct ptrmap_entry *__ph_pop_ret_ptrmap_entry() {
-    struct ptrmap_entry *ret = __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret;
-    __ph_ptrmap_stack_idx--;
-    return ret;
-}
-
-/*
 // Warning: the **address** of the returned struct should be used.
 static struct ptrmap_entry __ph_ptrmap_entry_from_null() {
     __ph_printf(">>> __ph_ptrmap_entry_from_null()\n");
@@ -936,7 +910,6 @@ static struct ptrmap_entry __ph_ptrmap_entry_from_base(void *base) {
     __ph_printf(">>> __ph_ptrmap_entry_from_base(%p)\n", base);
     return (struct ptrmap_entry){ .tag = __PH_MAPENT_TAG_ANON, .base = base, .len = __PH_UNTRACKED_OBJ_TOLERANCE };
 }
-*/
 
 static struct ptrmap_entry *__ph_ptr_update_from_obj(void *eetag, void *obj) {
     __ph_printf(">>> __ph_ptr_update_from_obj(%p)\n", obj);
@@ -992,6 +965,30 @@ static void __ph_ptr_deref(void *tag, void *addr, size_t size) {
 
     if (!(entry->base <= addr && addr + size <= entry->base + entry->len))
         raise(SIGUSR1);
+}
+
+static void __ph_push_args_ptrmap_entry(struct ptrmap_entry **args, size_t len, ...) {
+    __ph_ptrmap_stack_idx++;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args = args;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len = len;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret = NULL;
+
+    va_list arg;
+    va_start(arg, len);
+    for (int i = 0; i < len; i++) 
+        args[i] = va_arg(arg, struct ptrmap_entry *);
+    va_end(arg);
+}
+
+static struct ptrmap_entry *__ph_get_arg_ptrmap_entry(size_t pos) {
+    assert(pos < __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len);
+    return __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args[pos];
+}
+
+static struct ptrmap_entry *__ph_pop_ret_ptrmap_entry() {
+    struct ptrmap_entry *ret = __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret;
+    __ph_ptrmap_stack_idx--;
+    return ret;
 }
 
 // TODO: make ptrmap and objmap entry arrays to enable rcu.
