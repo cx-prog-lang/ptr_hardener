@@ -117,17 +117,6 @@ void *__ph_ptrmap __attribute__((weak));
 // Global object map: roughly the same as the global pointer map.
 void *__ph_objmap __attribute__((weak));
 
-struct ptrmap_stack_frame {
-    struct ptrmap_entry **args;
-    size_t len;
-    struct ptrmap_entry *ret;
-};
-
-#define __PH_PTRMAP_STACK_DEPTH (512)
-
-thread_local struct ptrmap_stack_frame __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
-thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
-
 /** Debug utilities **/
 
 static char *__ph_printf_convert(uint64_t num, int base, int *len) {
@@ -967,28 +956,53 @@ static void __ph_ptr_deref(void *tag, void *addr, size_t size) {
         raise(SIGUSR1);
 }
 
-static void __ph_push_args_ptrmap_entry(struct ptrmap_entry **args, size_t len, ...) {
+/** Pointer map entry stack **/
+
+struct ptrmap_stack_frame {
+    struct ptrmap_entry **args;
+    size_t len;
+    struct ptrmap_entry *ret;
+};
+
+// FIXME: constant depth? is it okay?
+#define __PH_PTRMAP_STACK_DEPTH (512)
+
+thread_local struct ptrmap_stack_frame __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
+thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
+
+// ret: NULL if void-type return, otherwise "null entry" assumed.
+static void __ph_ptrmap_stack_push(struct ptrmap_entry *ret, struct ptrmap_entry **args, size_t len, ...) {
     __ph_ptrmap_stack_idx++;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret = ret;
     __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args = args;
     __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len = len;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret = NULL;
 
     va_list arg;
     va_start(arg, len);
     for (int i = 0; i < len; i++) 
         args[i] = va_arg(arg, struct ptrmap_entry *);
     va_end(arg);
+    
+    return;
 }
 
-static struct ptrmap_entry *__ph_get_arg_ptrmap_entry(size_t pos) {
+static unsigned __ph_ptrmap_stack_checkpt() {
+    return __ph_ptrmap_stack_idx;
+}
+
+static struct ptrmap_entry *__ph_ptrmap_stack_get(size_t pos) {
     assert(pos < __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len);
     return __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args[pos];
 }
 
-static struct ptrmap_entry *__ph_pop_ret_ptrmap_entry() {
+static struct ptrmap_entry *__ph_ptrmap_stack_pop() {
     struct ptrmap_entry *ret = __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret;
     __ph_ptrmap_stack_idx--;
     return ret;
+}
+
+static void __ph_ptrmap_stack_restore(unsigned idx) {
+    __ph_ptrmap_stack_idx = idx;
 }
 
 // TODO: make ptrmap and objmap entry arrays to enable rcu.
