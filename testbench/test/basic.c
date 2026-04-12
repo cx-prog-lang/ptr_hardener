@@ -13,20 +13,35 @@ bool test_char_access_okay() {
     void *ptr = obj + 1;
     struct ptrmap_entry *ptr_pent = __ph_lvalue_ptr_update_from_ptrent(&ptr, obj_pent);
 
-    //__ph_lvalue_ptr_deref(&ptr, ptr, sizeof(char));
+    //__ph_ptr_deref(&ptr, ptr, sizeof(char));
     //*(char *)ptr;
+
+    void *obj3 = (void *)0x4000001f;
+    struct ptrmap_entry *obj3_pent = __ph_lvalue_ptr_update_from_obj(&obj3, (void *)0x4000001f);
+    
+    struct ptrmap_entry *anon_pent = alloca(sizeof(struct ptrmap_entry));
+    __ph_rvalue_ptr_update_from_obj(anon_pent, (void *)0x4000001f);
+
+    __ph_ptr_deref(anon_pent, (void *)0x4000001f, sizeof(char));
+
+    __ph_ptr_deref(obj_pent, obj, sizeof(char));
+    *(char *)obj;
+
+    struct ptrmap_entry *anon2_pent = alloca(sizeof(struct ptrmap_entry));
+    __ph_rvalue_ptr_update_from_obj(anon2_pent, obj);
 
     //free(obj);
 
-    //__ph_lvalue_ptr_deref(&obj, obj, sizeof(char));
-    //*(char *)obj;
+    __ph_ptr_deref(anon2_pent, obj, sizeof(char));
 
-    void *obj2 = (void *)0x44444444 + 1000;
-    struct ptrmap_entry *obj2_pent = __ph_lvalue_ptr_update_from_base(&obj2, (void *)0x44444444);
+    /*
+    void *obj2 = (void *)0x4000001f + 0x8888;
+    struct ptrmap_entry *obj2_pent = __ph_lvalue_ptr_update_from_obj(&obj2, (void *)0x4000001f);
     //void *ptr2 = obj2;
     
     __ph_ptr_deref(obj2_pent, obj2, sizeof(char));
     *(char *)obj2;
+    */
 
     /*
     //__ph_lvalue_ptr_move(&ptr, ptr2, sizeof(char), ptr2+1, sizeof(char));
@@ -39,7 +54,7 @@ bool test_char_access_okay() {
     //__ph_lvalue_ptr_move(&ptr2, &a, sizeof(int), ptr2+5, sizeof(int));
     ptr2 += 5;
 
-    __ph_lvalue_ptr_deref(&ptr2, ptr2, sizeof(char));
+    __ph_ptr_deref(&ptr2, ptr2, sizeof(char));
     *(char *)ptr2;
     */
     return true;
@@ -64,7 +79,7 @@ bool test_int_access_okay() {
     //__ph_lvalue_ptr_move(&test->p, test->p, sizeof(char), test->p + 20, sizeof(char));
     test->p += 20;
 
-    //__ph_lvalue_ptr_deref(&test->p);
+    //__ph_ptr_deref(&test->p);
     // *test->p;
 
     free(test);

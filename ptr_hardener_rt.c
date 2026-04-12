@@ -534,6 +534,7 @@ __ph_ptrmap_update_entry(struct ptrmap_entry *ptrmap,
 
     if (__PH_MAPENT_IS_NULL(entry) ||
         (__PH_MAPENT_IS_RANGE(entry) && entry->tag == evalue.tag)) {
+        __ph_printf("info: creating a ptrmap entry...\n");
         if (__PH_MAPENT_IS_RANGE(entry) && entry->tag == evalue.tag) {
             if (!__ph_ptrmap_entry_remove_from_list(entry))
                 return NULL;
@@ -549,6 +550,7 @@ __ph_ptrmap_update_entry(struct ptrmap_entry *ptrmap,
         return __ph_ptrmap_update_entry(__PH_MAPENT_GET_MAP(entry), evalue,
                                         lv + 1);
     } else /* range entry */ {
+        __ph_printf("info: creating a nested otrmap...\n");
         assert(__PH_MAPENT_IS_RANGE(entry));
         assert(entry->tag != evalue.tag);
 
@@ -569,6 +571,7 @@ __ph_ptrmap_update_entry(struct ptrmap_entry *ptrmap,
         if (!entry2)
             return NULL;
 
+        __ph_printf("info: created a nested ptrmap.\n");
         __ph_ptrmap_entry_print(lv, entry2);
 
         return entry2;
@@ -636,6 +639,7 @@ __ph_objmap_create_entry(struct objmap_entry *objmap,
     struct objmap_entry *entry = &objmap[idx];
 
     if (__PH_MAPENT_IS_NULL(entry)) {
+        __ph_printf("info: creating a objmap entry...\n");
         entry->base = evalue.base;
         entry->len = evalue.len;
         entry->tag = evalue.tag;
@@ -645,6 +649,7 @@ __ph_objmap_create_entry(struct objmap_entry *objmap,
         return __ph_objmap_create_entry(__PH_MAPENT_GET_MAP(entry), evalue,
                                         lv + 1);
     } else /* range entry */ {
+        __ph_printf("info: creating a nested objmap...\n");
         assert(__PH_MAPENT_IS_RANGE(entry));
         assert(entry->tag != evalue.tag);
 
@@ -665,6 +670,7 @@ __ph_objmap_create_entry(struct objmap_entry *objmap,
         if (!entry2)
             return NULL;
 
+        __ph_printf("info: created a nested objmap.\n");
         __ph_objmap_entry_print(lv, entry);
 
         return entry2;
@@ -938,54 +944,41 @@ __attribute__((weak)) void free_aligned_sized(void *ptr) {
     __ph_map_print();
 }
 
-static struct ptrmap_entry *__ph_rvalue_ptr_update_from_null(struct ptrmap_entry *ret) {
+static void __ph_rvalue_ptr_update_from_null(struct ptrmap_entry *ret) {
     __ph_printf(">>> __ph_rvalue_ptr_update_from_null(%p)\n", ret);
     *ret = (struct ptrmap_entry){
         .tag = __PH_MAPENT_TAG_ANON, .base = NULL, .len = 0};
-    return ret;
-}
 
-static struct ptrmap_entry *__ph_rvalue_ptr_update_from_base(struct ptrmap_entry *ret, void *base) {
-    __ph_printf(">>> __ph_rvalue_ptr_update_from_base(%p, %p)\n", ret, base);
-    struct ptrmap_entry evalue = (struct ptrmap_entry){.tag = __PH_MAPENT_TAG_ANON,
-                                 .base = base,
-                                 .len = __PH_UNTRACKED_OBJ_TOLERANCE};
-    *ret = evalue;
-    return ret;
+    __ph_ptrmap_entry_print(0, ret);
 }
 
 // TODO: merge this with __ph_lvalue_ptr_update_from_obj if viable.
-static struct ptrmap_entry *__ph_rvalue_ptr_update_from_obj(struct ptrmap_entry *ret, void *obj) {
+static void __ph_rvalue_ptr_update_from_obj(struct ptrmap_entry *ret, void *obj) {
     __ph_printf(">>> __ph_rvalue_ptr_update_from_obj(%p, %p)\n", ret, obj);
 
     if (__PH_IS_STACKADDR(obj)) {
         // Case 1: is a stack object.
         // Copy range information from the stack bulk.
-        return __ph_ptrmap_entry_update(ret, &__ph_stack_ptrmap_entry);
+        __ph_ptrmap_entry_update(ret, &__ph_stack_ptrmap_entry);
     } else {
         struct objmap_entry *oent = __ph_objmap_get_entry(obj);
         if (oent) {
+            __ph_printf("info: from this objent entry...\n");
+            __ph_objmap_entry_print(0, oent);
+
             // Case 2: from an objct map entry.
             // Copy range information from the object.
-            return __ph_ptrmap_entry_update(ret, (struct ptrmap_entry *)oent);
+            __ph_ptrmap_entry_update(ret, (struct ptrmap_entry *)oent);
         } else {
             // Case 3: from an untracked object.
             // Make an untracked object at 'obj'.
             oent = __ph_objmap_create_entries(obj, __PH_UNTRACKED_OBJ_TOLERANCE);
             assert(oent);
-            return __ph_ptrmap_entry_update(ret, (struct ptrmap_entry *)oent);
+            __ph_ptrmap_entry_update(ret, (struct ptrmap_entry *)oent);
         }
     }
-}
 
-static struct ptrmap_entry *__ph_lvalue_ptr_update_from_base(void *eetag, void *base) {
-    __ph_printf(">>> __ph_lvalue_ptr_update_from_base(%p, %p)\n", eetag, base);
-
-    struct ptrmap_entry evalue = (struct ptrmap_entry){.tag = eetag,
-                                 .base = base,
-                                 .len = __PH_UNTRACKED_OBJ_TOLERANCE};
-    struct ptrmap_entry *ret = __ph_ptrmap_update_entry_by_tag(eetag, &evalue);
-    return ret;
+    __ph_ptrmap_entry_print(0, ret);
 }
 
 static struct ptrmap_entry *__ph_lvalue_ptr_update_from_obj(void *eetag, void *obj) {
@@ -1028,6 +1021,9 @@ __ph_lvalue_ptr_update_from_ptrent(void *eetag, struct ptrmap_entry *erent) {
 
 static void __ph_ptr_deref(struct ptrmap_entry *entry, void *addr, size_t size) {
     __ph_printf(">>> __ph_ptr_deref(%p, %p, %d)\n", entry, addr, size);
+
+    __ph_printf("info: against this ptrmap entry...\n");
+    __ph_ptrmap_entry_print(0, entry);
 
     if (!(entry->base <= addr && addr + size <= entry->base + entry->len))
         raise(SIGUSR1);
