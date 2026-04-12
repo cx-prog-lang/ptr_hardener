@@ -1142,4 +1142,5 @@ static void __ph_ptrmap_stack_restore(unsigned idx) {
     __ph_ptrmap_stack_idx = idx;
 }
 
-// TODO: make ptrmap & objmap pointer arrays to enable rcu (and nested map promotion).
+// TODO: objmap_entry --> void *tag, void *base, size_t len
+// TODO: ptrmap_entry --> void *tag, struct objmap_entry *obj
