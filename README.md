@@ -6,7 +6,7 @@ This project has a simple-sounding goal: **make [SoftBound](https://acg.cis.upen
 
 If you asked, "Why are we looking at a (soon-to-be-)multi-decade-old paper now?", I'd have asked the same question if it were not my project! In short, let me summarize the main motivations of this project below:
 
- - Ultra-low-level programs _still_ need direct pointer access and manipulation. ([Longer version](https://gwangmu.medium.com/turn-key-solution-for-ultra-low-level-c-source-code-part-1-2aeb99153d84))
+ - Despite all memory-safe languages, ultra-low-level programs _still_ need direct pointer access and manipulation. ([Longer version](https://gwangmu.medium.com/turn-key-solution-for-ultra-low-level-c-source-code-part-1-2aeb99153d84))
  - In the era of (so-called) AI security, _not_ having any memory vulnerabilities became more important than ever. ([Longer version](https://gwangmu.medium.com/turn-key-memory-safety-solution-for-ultra-low-level-c-source-code-part-7-b91fe08f7349))
 
 I'll just add some contextual information here. By "ultra-low-level" (which I don't think is a mainstream term because I just made it up), I meant programs that directly interface with hardware. Those programs _need_ direct access to and manipulation of memory pointers because that's the only way to interact with hardware. This is the unsalvageable point for memory-safe programming languages. See [this article](https://www.usenix.org/system/files/1311_05-08_mickens.pdf) about this point.
