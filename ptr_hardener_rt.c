@@ -1108,6 +1108,7 @@ thread_local struct ptrmap_stack_frame
 thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
 
 // ret: NULL if void-type return, otherwise uninitialized ptrmap_entry assumed.
+// args: should be long enough to store ptrmap_entry's in "...".
 static void __ph_ptrmap_stack_push(struct ptrmap_entry *ret,
                                    struct ptrmap_entry **args, size_t len,
                                    ...) {
