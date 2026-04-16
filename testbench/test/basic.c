@@ -30,7 +30,7 @@ bool test_char_access_okay() {
     struct ptrmap_entry *anon2_pent = alloca(sizeof(struct ptrmap_entry));
     __ph_rvalue_ptr_update_from_obj(anon2_pent, obj);
 
-    //free(obj);
+    free(obj);
 
     __ph_ptr_deref(anon2_pent, obj, sizeof(char));
 

@@ -1100,14 +1100,14 @@ struct ptrmap_stack_frame {
     struct ptrmap_entry *ret;
 };
 
-// FIXME: constant depth? is it okay?
+// FIXME: constant depth
 #define __PH_PTRMAP_STACK_DEPTH (512)
 
 thread_local struct ptrmap_stack_frame
     __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
 thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
 
-// ret: NULL if void-type return, otherwise "null entry" assumed.
+// ret: NULL if void-type return, otherwise uninitialized ptrmap_entry assumed.
 static void __ph_ptrmap_stack_push(struct ptrmap_entry *ret,
                                    struct ptrmap_entry **args, size_t len,
                                    ...) {
@@ -1132,8 +1132,7 @@ static struct ptrmap_entry *__ph_ptrmap_stack_get(size_t pos) {
     return __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args[pos];
 }
 
-static struct ptrmap_entry *__ph_ptrmap_stack_pop() {
-    struct ptrmap_entry *ret = __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret;
+static void __ph_ptrmap_stack_pop() {
     __ph_ptrmap_stack_idx--;
     return ret;
 }
@@ -1141,6 +1140,3 @@ static struct ptrmap_entry *__ph_ptrmap_stack_pop() {
 static void __ph_ptrmap_stack_restore(unsigned idx) {
     __ph_ptrmap_stack_idx = idx;
 }
-
-// TODO: objmap_entry --> void *tag, void *base, size_t len
-// TODO: ptrmap_entry --> void *tag, struct objmap_entry *obj
