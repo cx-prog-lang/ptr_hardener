@@ -142,6 +142,9 @@ static char *__ph_printf_convert(uint64_t num, int base, int *len) {
 }
 
 static void __ph_printf(char *format, ...) {
+#ifdef NDEBUG
+    return;
+#else
     // Based on:
     // https://stackoverflow.com/questions/1735236/how-to-write-my-own-printf-in-c
     char *traverse;
@@ -217,6 +220,7 @@ static void __ph_printf(char *format, ...) {
     }
 
     va_end(arg);
+#endif
 }
 
 static void __ph_ptrmap_print_inner(struct ptrmap_entry **ptrmap,
@@ -326,22 +330,30 @@ static void __ph_ptrmap_print_inner(struct ptrmap_entry **ptrmap,
 }
 
 static void __ph_ptrmap_print() {
+#ifdef NDEBUG
+    return;
+#else
     if (!__ph_ptrmap) {
         __ph_printf("(no range map)\n");
         return;
     }
 
     __ph_ptrmap_print_inner(__ph_ptrmap, 0, 0, false, __PH_PTRMAP_NR_ENTRIES);
+#endif
 }
 
 static void __ph_ptrmap_entry_print(unsigned base_lv,
                                     struct ptrmap_entry *entry) {
+#ifdef NDEBUG
+    return;
+#else
     if (!entry) {
         __ph_printf("(no range map entry)\n");
         return;
     }
 
     __ph_ptrmap_print_inner(&entry, base_lv, 0, true, 1);
+#endif
 }
 
 static void __ph_objmap_print_inner(struct objmap_entry **objmap,
@@ -441,22 +453,30 @@ static void __ph_objmap_print_inner(struct objmap_entry **objmap,
 }
 
 static void __ph_objmap_print() {
+#ifdef NDEBUG
+    return;
+#else
     if (!__ph_objmap) {
         __ph_printf("(no range map)\n");
         return;
     }
 
     __ph_objmap_print_inner(__ph_objmap, 0, 0, true, __PH_OBJMAP_NR_ENTRIES);
+#endif
 }
 
 static void __ph_objmap_entry_print(unsigned base_lv,
                                     struct objmap_entry *entry) {
+#ifdef NDEBUG
+    return;
+#else
     if (!entry) {
         __ph_printf("(no range map entry)\n");
         return;
     }
 
     __ph_objmap_print_inner(&entry, base_lv, 0, true, 1);
+#endif
 }
 
 static void __ph_map_print() {
@@ -1101,21 +1121,23 @@ struct ptrmap_stack_frame {
 };
 
 // FIXME: constant depth
-#define __PH_PTRMAP_STACK_DEPTH (512)
+#define __PH_PTRMAP_STACK_DEPTH (1 << 10)
 
 thread_local struct ptrmap_stack_frame
     __ph_ptrmap_stack[__PH_PTRMAP_STACK_DEPTH] __attribute__((weak));
 thread_local unsigned __ph_ptrmap_stack_idx __attribute__((weak));
 
-// ret: NULL if void-type return, otherwise uninitialized ptrmap_entry assumed.
+/* NOTE: the following should be implemented in the IR pass!
+ * This is because '__ph_ptrmap_stack_pop' involves conditionally allocating a
+ * stack object in the **caller** stack frame.
+
 // args: should be long enough to store ptrmap_entry's in "...".
-static void __ph_ptrmap_stack_push(struct ptrmap_entry *ret,
-                                   struct ptrmap_entry **args, size_t len,
+static void __ph_ptrmap_stack_push(struct ptrmap_entry **args, size_t len,
                                    ...) {
+    // Non-allocator callees should update the 'ret' of this frame.
     __ph_ptrmap_stack_idx++;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret = ret;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args = args;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx].len = len;
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx] = 
+        (struct ptrmap_stack_frame){ .ret = NULL, .args = args, .len = len };
 
     va_list arg;
     va_start(arg, len);
@@ -1133,7 +1155,17 @@ static struct ptrmap_entry *__ph_ptrmap_stack_get(size_t pos) {
     return __ph_ptrmap_stack[__ph_ptrmap_stack_idx].args[pos];
 }
 
-static void __ph_ptrmap_stack_pop() {
+// ret: NULL if not expecting 'ret', otherwise '*ret' should be writable.
+static struct ptrmap_entry *__ph_ptrmap_stack_pop(bool expect_ret, void *obj) {
+    struct ptrmap_entry *ret;
+    if (expect_ret) {
+        ret = __ph_ptrmap_stack[__ph_ptrmap_stack_idx].ret;
+        if (ret == NULL) {
+            // Load an entry from the objmap instead.
+            ret = alloca_to_prev_stack_frame(sizeof(struct ptrmap_entry));
+            __ph_rvalue_ptr_update_from_obj(ret, obj);
+        }
+    }
     __ph_ptrmap_stack_idx--;
     return ret;
 }
@@ -1141,3 +1173,9 @@ static void __ph_ptrmap_stack_pop() {
 static void __ph_ptrmap_stack_restore(unsigned idx) {
     __ph_ptrmap_stack_idx = idx;
 }
+
+*/
+
+// TODO: every function should be non-static to outsurvive the initial opt.
+// TODO: during the path, '__ph_*' functions should all be staticized
+// ("internal") to make the compiler inline them in the following re-opt.
