@@ -1,3 +1,4 @@
+# Project SoftBounded
 
 This project has a simple-sounding goal: **make [SoftBound](https://acg.cis.upenn.edu/papers/pldi09_softbound.pdf) usable in security-critical legacy or ultra-low-level C projects.** As a context, [SoftBound](https://acg.cis.upenn.edu/papers/pldi09_softbound.pdf) was a paper published in 2009 (more than a decade ago). The paper describes the basic design of enforcing buffer boundaries in C source code at compile time. Even though the paper proved that boundary checking is complete when done right, no real projects (that I'm aware of) use it, and _still, C pointers are bare_. How come? This project aims to address the "practicality" problems in SoftBound so that security-critical legacy or ultra-low-level C projects are no longer _bare_ in their memory pointers.
 
