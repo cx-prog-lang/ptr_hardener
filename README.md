@@ -1,4 +1,3 @@
-# Project SoftBounded
 
 This project has a simple-sounding goal: **make [SoftBound](https://acg.cis.upenn.edu/papers/pldi09_softbound.pdf) usable in security-critical legacy or ultra-low-level C projects.** As a context, [SoftBound](https://acg.cis.upenn.edu/papers/pldi09_softbound.pdf) was a paper published in 2009 (more than a decade ago). The paper describes the basic design of enforcing buffer boundaries in C source code at compile time. Even though the paper proved that boundary checking is complete when done right, no real projects (that I'm aware of) use it, and _still, C pointers are bare_. How come? This project aims to address the "practicality" problems in SoftBound so that security-critical legacy or ultra-low-level C projects are no longer _bare_ in their memory pointers.
 
@@ -22,7 +21,7 @@ I thought SoftBound's approach might be a good fundamental solution, but we shou
  - (Obviously) performance overheads.
  - Brittle security guarantee. ([Longer version](https://gwangmu.medium.com/turn-key-memory-safety-solution-for-ultra-low-level-c-source-code-part-5-dc5e9c6ec539))
 
-By "brittle," I mean that SoftBound's security guarantee is too easily broken by too many factors: usage of external libraries, (possible) imperfection in static analysis, no support for temporal memory corruption, ... There may not be a "silver bullet" solution for this, and it can very much be a whack-a-mole problem (like any other engineering problems). If you embrace the fact that this may require some step-by-step, continuous improvements, this strategy may make sense: **improve the brittleness of SoftBound in real-world programs while (also) attempting to mitigate performance overheads.** (Sounds a lot similar to what [WineHQ](https://www.winehq.org/) is pursuing for compatibility...)
+By "brittle," I mean that SoftBound's security guarantee is too easily broken by too many factors: usage of external libraries, (possible) imperfection in static analysis, no support for temporal memory corruption, ... There may not be a "silver bullet" solution for this, and it can very much be a whack-a-mole problem (like any other engineering problems). If you embrace the fact that this may require some step-by-step, continuous improvements, this strategy may make sense: **improve the brittleness of SoftBound in real-world programs while (also) attempting to mitigate performance overheads.** (Sounds a lot similar to what [WineHQ](https://www.winehq.org/) is pursuing for compatibility, eh?)
 
 ## Design
 
