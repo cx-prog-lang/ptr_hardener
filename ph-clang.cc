@@ -29,10 +29,10 @@ int main(int argc, char** argv) {
   std::string basepath = exepath.substr(0, _name_pos);
 
   std::string real_exepath;
-  if (exename == "tb-clang++")
-    real_exepath = basepath + "/clang++";
+  if (exename == "ph-clang++")
+    real_exepath = "clang++";
   else
-    real_exepath = basepath + "/clang";
+    real_exepath = "clang";
   cc_params[0] = (char*)real_exepath.c_str();
 
   std::string clang_chk = "which " + real_exepath + " >/dev/null 2>&1";
@@ -41,23 +41,21 @@ int main(int argc, char** argv) {
     abort();
   }
 
-  std::string libpath = std::string(basepath + "/libIRTestbed.so");
+  std::string libpath = std::string(basepath + "/libPtrHardener.so");
   std::string pass_plugin = "-fpass-plugin=" + libpath;
 
   cc_params[cc_par_cnt++] = (char*)"-Xclang";
   cc_params[cc_par_cnt++] = (char*)pass_plugin.c_str();
-  
-  // TODO: uncomment the followings if needed.
 
-  /*  - if your analysis requires explicitly typed pointers in IR. 
+  /*  - in case it requires explicitly typed pointers in IR. 
   cc_params[cc_par_cnt++] = (char*)"-Xclang";
   cc_params[cc_par_cnt++] = (char*)"-no-opaque-pointers"; */
 
-  /*  - if your analysis precludes any inlining.
+  /*  - in case it precludes any inlining.
   cc_params[cc_par_cnt++] = (char*)"-Xclang";
   cc_params[cc_par_cnt++] = (char*)"-fno-inline"; */
 
-  /*  - if your analysis needs some debugging information by default.
+  /*  - in case it needs some debugging information by default.
   cc_params[cc_par_cnt++] = (char*)"-g"; */
 
   while (--argc) {
