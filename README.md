@@ -32,7 +32,7 @@ The design is changing dynamically (as of now, [this article](https://gwangmu.me
 
 The agenda items below are tentative, and the earlier items may be revisited iteratively while the latter are being conducted.
 
- - [X] Write a basic runtime logic.
+ - [x] Write a runtime logic.
  - [ ] Write an instrumentation IR pass _after optimization_.
     - [ ] Intra-function parts.
     - [ ] Inter-function parts.
