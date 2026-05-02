@@ -22,8 +22,12 @@ I thought SoftBound's approach might be a good fundamental solution, but we shou
  - (Obviously) performance overheads.
  - Brittle security guarantee. ([Longer version](https://gwangmu.medium.com/turn-key-memory-safety-solution-for-ultra-low-level-c-source-code-part-5-dc5e9c6ec539))
 
-By "brittle," I mean that SoftBound's security guarantee is too easily broken by too many factors: usage of external libraries, (possible) imperfection in static analysis, no support for temporal memory corruption, ... There may not be a "silver bullet" solution for this, and it can very much be a whack-a-mole problem (like any other engineering problems). If you embrace the fact that this may require some step-by-step, continuous improvements, this strategy may make sense: **improve the brittleness of SoftBound in real-world programs while (also) attempting to mitigate performance overheads.** (Sounds a lot similar to what [WineHQ](https://www.winehq.org/) is pursuing for compatibility, eh?)
+By "brittle," I mean that SoftBound's security guarantee is too easily broken by too many factors: usage of external libraries, (possible) imperfection in static analysis, no support for temporal memory corruption, ... There may not be a "silver bullet" solution for this, and it can very much be a whack-a-mole problem (like any other engineering problem). If you embrace the fact that this may require some step-by-step, continuous improvements, this strategy may make sense: **improve the brittleness of SoftBound in real-world programs while (also) attempting to mitigate performance overheads.** (Sounds a lot similar to what [WineHQ](https://www.winehq.org/) is pursuing for compatibility, eh?)
 
 ## Design
 
 The design is changing dynamically (as of now, [this article](https://gwangmu.medium.com/turn-key-memory-safety-solution-for-ultra-low-level-c-source-code-part-5-dc5e9c6ec539) is closer to what it is right now), and once some functionality standards are met, I'd like to add optimizations to improve performance. For now, my pity attempt to make the performance better is i) to trade memory overheads for performance overheads (=prefer using more memory if it can help runtime performance), and ii) to _directly_ add runtime logic to target code so that the compiler can optimize both of them at once (in the hope that compilers remove unnecessary memory safety logic on behalf of me).
+
+## Notes
+
+ - Contributions are welcome! (Even though almost nothing has been done or workable other than by me yet...)
