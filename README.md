@@ -30,11 +30,11 @@ The design is changing dynamically (as of now, [this article](https://gwangmu.me
 
 ## Agenda
 
-The agenda items below are tentative, and the earlier items may be revisited iteratively while the latter are being conducted.
+The agenda items below are tentative, and the earlier items may be revisited iteratively while the latter are being conducted. Checked boxes mean being worked on (not done).
 
- - [x] Write a runtime logic.
- - [ ] Write an instrumentation IR pass _after optimization_.
-    - [ ] Intra-function parts.
+ - [x] Write runtime logic code.
+ - [x] Write an instrumentation IR pass _after optimization_.
+    - [x] Intra-function parts.
     - [ ] Inter-function parts.
  - [ ] Investigate instrumented IRs and check runtime functionality and overheads.
     - [ ] Unit-test code.
