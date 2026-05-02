@@ -28,6 +28,21 @@ By "brittle," I mean that SoftBound's security guarantee is too easily broken by
 
 The design is changing dynamically (as of now, [this article](https://gwangmu.medium.com/turn-key-memory-safety-solution-for-ultra-low-level-c-source-code-part-5-dc5e9c6ec539) is closer to what it is right now), and once some functionality standards are met, I'd like to add optimizations to improve performance. For now, my pity attempt to make the performance better is i) to trade memory overheads for performance overheads (=prefer using more memory if it can help runtime performance), and ii) to _directly_ add runtime logic to target code so that the compiler can optimize both of them at once (in the hope that compilers remove unnecessary memory safety logic on behalf of me).
 
+## Agenda
+
+The agenda items below are tentative, and the earlier items may be revisited iteratively while the latter are being conducted.
+
+ - [X] Write a basic runtime logic.
+ - [ ] Write an instrumentation IR pass _after optimization_.
+    - [ ] Intra-function parts.
+    - [ ] Inter-function parts.
+ - [ ] Investigate instrumented IRs and check runtime functionality and overheads.
+    - [ ] Unit-test code.
+    - [ ] Tiny open-source code. (~1k loc)
+    - [ ] Small open-source code. (~10k loc)
+ - [ ] Set up fuzzing pipelines and observe performance overheads.
+    - [ ] (Benchmark projects TBD)
+    
 ## Notes
 
  - Contributions are welcome! (Even though almost nothing has been done or workable other than by me yet...)
