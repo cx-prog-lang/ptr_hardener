@@ -45,4 +45,5 @@ The agenda items below are tentative, and the earlier items may be revisited ite
     
 ## Notes
 
+ - To avoid confusion, "SoftBounded" is a _high-level_ project name. The code-level project name is simply "PtrHardener" ("PH" in short. ~~Not r/ProgrammerHumor~~), and this will be used in code instead of "SoftBounded."
  - Contributions are welcome! (Even though almost nothing has been done or workable other than by me yet...)
