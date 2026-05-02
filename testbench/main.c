@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-#include "test/basic.h"
-#include "test/intermediate.h"
-#include "test/advanced.h"
+#include "basic.h"
+#include "intermediate.h"
+#include "advanced.h"
 
 #define TEST(prefix, test_fn) { \
     printf("\033[1m[%s]\033[m %s ... ", (prefix), (#test_fn));   \

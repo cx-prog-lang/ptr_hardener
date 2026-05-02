@@ -49,8 +49,8 @@
 
 #define __PH_MAPENT_SET_MAP(entry, map)                                        \
     do {                                                                       \
-        assert((entry) != NULL); \
-        (entry)->tag = NULL;                                              \
+        assert((entry) != NULL);                                               \
+        (entry)->tag = NULL;                                                   \
         (entry)->base = map;                                                   \
     } while (0)
 #define __PH_MAPENT_IS_MAP(entry) ((entry) != NULL && (entry)->tag == NULL)
@@ -105,9 +105,10 @@ void (*free_impl)(void *) __attribute__((weak));            // 'free'
 #define __PH_IS_STACKADDR(addr)                                                \
     (((intptr_t)(addr) & __PH_STACK_MASK) == __PH_STACK_MASK)
 
-static struct ptrmap_entry __ph_stack_ptrmap_entry = {.tag = __PH_MAPENT_TAG_ANON,
-                                      .base = __PH_STACK_BASE,
-                                      .len = __PH_STACK_LEN};
+static struct ptrmap_entry __ph_stack_ptrmap_entry = {.tag =
+                                                          __PH_MAPENT_TAG_ANON,
+                                                      .base = __PH_STACK_BASE,
+                                                      .len = __PH_STACK_LEN};
 
 // Global pointer map: the entry point of the pointer/object map. On a hash
 // collision, the collided entries are moved to a nested map. Thanks to
@@ -235,7 +236,7 @@ static void __ph_ptrmap_print_inner(struct ptrmap_entry **ptrmap,
             types[i] = "NULL";
         else if (__PH_MAPENT_IS_MAP(ptrmap[i]))
             types[i] = "MAP";
-        else 
+        else
             types[i] = "NORMAL";
     }
 
@@ -368,7 +369,7 @@ static void __ph_objmap_print_inner(struct objmap_entry **objmap,
             types[i] = "NULL";
         else if (__PH_MAPENT_IS_MAP(objmap[i]))
             types[i] = "MAP";
-        else 
+        else
             types[i] = "NORMAL";
     }
 
@@ -533,7 +534,8 @@ static struct ptrmap_entry **__ph_ptrmap_create(unsigned n_entries) {
 static struct ptrmap_entry *__ph_ptrmap_entry_create() {
     assert(aalloc_impl);
     void *ret = aalloc_impl(1, sizeof(struct ptrmap_entry));
-    if (!ret) return NULL;
+    if (!ret)
+        return NULL;
     memset(ret, 0, sizeof(struct ptrmap_entry));
     return ret;
 }
@@ -611,7 +613,8 @@ __ph_ptrmap_update_entry(struct ptrmap_entry **ptrmap,
         if (!map_entry)
             return NULL;
 
-        struct ptrmap_entry **new_ptrmap = __ph_ptrmap_create(__PH_PTRMAP_NR_ENTRIES);
+        struct ptrmap_entry **new_ptrmap =
+            __ph_ptrmap_create(__PH_PTRMAP_NR_ENTRIES);
         if (!new_ptrmap)
             return NULL;
 
@@ -682,7 +685,8 @@ static struct objmap_entry **__ph_objmap_create(unsigned n_entries) {
 static struct objmap_entry *__ph_objmap_entry_create() {
     assert(aalloc_impl);
     void *ret = aalloc_impl(1, sizeof(struct objmap_entry));
-    if (!ret) return NULL;
+    if (!ret)
+        return NULL;
     memset(ret, 0, sizeof(struct objmap_entry));
     return ret;
 }
@@ -723,7 +727,8 @@ __ph_objmap_create_entry(struct objmap_entry **objmap,
         if (!map_entry)
             return NULL;
 
-        struct objmap_entry **new_objmap = __ph_objmap_create(__PH_OBJMAP_NR_ENTRIES);
+        struct objmap_entry **new_objmap =
+            __ph_objmap_create(__PH_OBJMAP_NR_ENTRIES);
         if (!new_objmap)
             return NULL;
 
@@ -805,7 +810,8 @@ __ph_objmap_get_entry_inner(struct objmap_entry **objmap, void *obj,
         return __ph_objmap_get_entry_inner(__PH_MAPENT_GET_MAP(entry), obj,
                                            lv + 1, pop);
     } else if (entry != NULL && entry->tag == obj) {
-        if (pop) objmap[idx] = NULL;
+        if (pop)
+            objmap[idx] = NULL;
         return entry;
     } else {
         return NULL;
@@ -1012,7 +1018,8 @@ __attribute__((weak)) void free_aligned_sized(void *ptr) {
     __ph_map_print();
 }
 
-static void __ph_rvalue_ptr_update_from_null(struct ptrmap_entry *ret) {
+__attribute__((weak)) void
+__ph_rvalue_ptr_update_from_null(struct ptrmap_entry *ret) {
     __ph_printf(">>> __ph_rvalue_ptr_update_from_null(%p)\n", ret);
     *ret = (struct ptrmap_entry){
         .tag = __PH_MAPENT_TAG_ANON, .base = NULL, .len = 0};
@@ -1021,7 +1028,8 @@ static void __ph_rvalue_ptr_update_from_null(struct ptrmap_entry *ret) {
 }
 
 // TODO: merge this with __ph_lvalue_ptr_update_from_obj if viable.
-static void __ph_rvalue_ptr_update_from_obj(struct ptrmap_entry *ret, void *obj) {
+__attribute__((weak)) void
+__ph_rvalue_ptr_update_from_obj(struct ptrmap_entry *ret, void *obj) {
     __ph_printf(">>> __ph_rvalue_ptr_update_from_obj(%p, %p)\n", ret, obj);
 
     if (__PH_IS_STACKADDR(obj)) {
@@ -1040,7 +1048,8 @@ static void __ph_rvalue_ptr_update_from_obj(struct ptrmap_entry *ret, void *obj)
         } else {
             // Case 3: from an untracked object.
             // Make an untracked object at 'obj'.
-            oent = __ph_objmap_create_entries(obj, __PH_UNTRACKED_OBJ_TOLERANCE);
+            oent =
+                __ph_objmap_create_entries(obj, __PH_UNTRACKED_OBJ_TOLERANCE);
             assert(oent);
             __ph_ptrmap_entry_update(ret, (struct ptrmap_entry *)oent);
         }
@@ -1049,7 +1058,7 @@ static void __ph_rvalue_ptr_update_from_obj(struct ptrmap_entry *ret, void *obj)
     __ph_ptrmap_entry_print(0, ret);
 }
 
-static struct ptrmap_entry *
+__attribute__((weak)) struct ptrmap_entry *
 __ph_lvalue_ptr_update_from_obj(void *eetag, void *obj) {
     __ph_printf(">>> __ph_lvalue_ptr_update_from_obj(%p, %p)\n", eetag, obj);
 
@@ -1067,7 +1076,8 @@ __ph_lvalue_ptr_update_from_obj(void *eetag, void *obj) {
         } else {
             // Case 3: from an untracked object.
             // Make an untracked object at 'obj'.
-            oent = __ph_objmap_create_entries(obj, __PH_UNTRACKED_OBJ_TOLERANCE);
+            oent =
+                __ph_objmap_create_entries(obj, __PH_UNTRACKED_OBJ_TOLERANCE);
             assert(oent);
             return __ph_ptrmap_update_entry_by_tag(eetag,
                                                    (struct ptrmap_entry *)oent);
@@ -1075,13 +1085,12 @@ __ph_lvalue_ptr_update_from_obj(void *eetag, void *obj) {
     }
 }
 
-static struct ptrmap_entry *
+__attribute__((weak)) struct ptrmap_entry *
 __ph_lvalue_ptr_update_from_ptr(void *eetag) {
-    __ph_printf(
-        ">>> __ph_lvalue_ptr_update_from_ptr(%p)\n", eetag);
+    __ph_printf(">>> __ph_lvalue_ptr_update_from_ptr(%p)\n", eetag);
 
     struct ptrmap_entry *ret = __ph_ptrmap_get_entry(eetag);
-    if (!ret) 
+    if (!ret)
         return __ph_lvalue_ptr_update_from_obj(eetag, *(void **)eetag);
 
     __ph_ptrmap_print();
@@ -1089,11 +1098,11 @@ __ph_lvalue_ptr_update_from_ptr(void *eetag) {
     return ret;
 }
 
-static struct ptrmap_entry *
+__attribute__((weak)) struct ptrmap_entry *
 __ph_lvalue_ptr_update_from_ptrent(void *eetag, struct ptrmap_entry *erent) {
-    __ph_printf(
-        ">>> __ph_lvalue_ptr_update_from_ptrent(%p, {tag: %p, base: %p, len: %d})\n",
-        eetag, erent->tag, erent->base, erent->len);
+    __ph_printf(">>> __ph_lvalue_ptr_update_from_ptrent(%p, {tag: %p, base: "
+                "%p, len: %d})\n",
+                eetag, erent->tag, erent->base, erent->len);
 
     struct ptrmap_entry *ret = __ph_ptrmap_update_entry_by_tag(eetag, erent);
 
@@ -1102,7 +1111,8 @@ __ph_lvalue_ptr_update_from_ptrent(void *eetag, struct ptrmap_entry *erent) {
     return ret;
 }
 
-static void __ph_ptr_deref(struct ptrmap_entry *entry, void *addr, size_t size) {
+__attribute__((weak)) void __ph_ptr_deref(struct ptrmap_entry *entry,
+                                          void *addr, size_t size) {
     __ph_printf(">>> __ph_ptr_deref(%p, %p, %d)\n", entry, addr, size);
 
     __ph_printf("info: against this ptrmap entry...\n");
@@ -1136,7 +1146,7 @@ static void __ph_ptrmap_stack_push(struct ptrmap_entry **args, size_t len,
                                    ...) {
     // Non-allocator callees should update the 'ret' of this frame.
     __ph_ptrmap_stack_idx++;
-    __ph_ptrmap_stack[__ph_ptrmap_stack_idx] = 
+    __ph_ptrmap_stack[__ph_ptrmap_stack_idx] =
         (struct ptrmap_stack_frame){ .ret = NULL, .args = args, .len = len };
 
     va_list arg;
