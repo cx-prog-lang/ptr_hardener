@@ -30,7 +30,7 @@ The design is changing dynamically (as of now, [this article](https://gwangmu.me
 
 ## Agenda
 
-The agenda items below are tentative, and the earlier items may be revisited iteratively while the latter are being conducted. **Checked boxes mean being worked on (not done).**
+The agenda items below are tentative, and the earlier items may be revisited iteratively while the latter are being conducted. **Checked boxes: work in progress (not done).**
 
  - [x] Write runtime logic code.
  - [x] Write an instrumentation IR pass _after optimization_.
